@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import { getTerrainHeight, getPathX } from '@/lib/terrain';
+import { getTerrainHeight, TRAIL_POLYLINE } from '@/lib/terrain';
 
 interface CairnInstance {
   x: number;
@@ -12,20 +12,17 @@ interface CairnInstance {
 }
 
 export function Cairns() {
-  // Checkpoint cairns placed along the trail edge every 40-50 meters
+  // Checkpoint stone cairns and Tibetan prayer flags placed along trail margins
   const cairnLocations = useMemo(() => {
     const list: CairnInstance[] = [];
-    const zMilestones = [60, 20, -25, -75, -125, -175, -210];
-
-    zMilestones.forEach((z, i) => {
-      const pathX = getPathX(z);
-      // Offset slightly to the left or right of the path
-      const sideOffset = (i % 2 === 0 ? 1 : -1) * 2.6;
-      const x = pathX + sideOffset;
+    for (let i = 15; i < TRAIL_POLYLINE.length; i += 28) {
+      const tp = TRAIL_POLYLINE[i];
+      const side = (i % 2 === 0 ? 1 : -1) * 2.2;
+      const x = tp.gameX + side;
+      const z = tp.gameZ;
       const y = getTerrainHeight(x, z);
       list.push({ x, y, z, scale: 0.9 + (i % 3) * 0.15 });
-    });
-
+    }
     return list;
   }, []);
 

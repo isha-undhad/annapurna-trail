@@ -1,17 +1,29 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useProgress } from '@react-three/drei';
+import { isHeightmapLoaded, loadHeightmap } from '@/lib/terrain';
 
 export function LoadingScreen() {
   const { active, progress, item } = useProgress();
+  const [terrainLoaded, setTerrainLoaded] = useState(isHeightmapLoaded());
 
-  if (!active && progress >= 100) return null;
+  useEffect(() => {
+    if (!terrainLoaded) {
+      loadHeightmap().then(() => setTerrainLoaded(true));
+    }
+  }, [terrainLoaded]);
 
-  // Format filename for readable display
-  const currentAsset = item
-    ? item.split('/').pop() || 'Environment & Textures'
-    : 'Himalayan Assets';
+  if (!active && progress >= 100 && terrainLoaded) return null;
+
+  // Format asset filename for readable display
+  const currentAsset = !terrainLoaded
+    ? 'Streaming 30m DEM Elevation Heightmap (9 MB)...'
+    : item
+    ? item.split('/').pop() || 'Streaming Himalayan Textures'
+    : 'Hydrating Real-World Annapurna Terrain...';
+
+  const totalProgress = !terrainLoaded ? Math.min(65, Math.round(progress * 0.65)) : Math.round(progress);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#0b1526] px-6 text-white transition-opacity duration-500">
@@ -29,19 +41,19 @@ export function LoadingScreen() {
         Loading Annapurna Sanctuary
       </h2>
       <p className="mt-2 text-xs font-mono text-sky-300/80">
-        Streaming PBR textures & 360° Himalayan HDRI
+        Streaming 30m DEM Elevation, PBR Textures & 360° HDRI
       </p>
 
       {/* Progress Bar */}
       <div className="mt-8 w-full max-w-xs">
         <div className="flex justify-between text-xs font-semibold text-slate-400 mb-2">
-          <span>Loading Assets</span>
-          <span className="font-mono text-sky-400">{Math.round(progress)}%</span>
+          <span>Terrain & Assets</span>
+          <span className="font-mono text-sky-400">{totalProgress}%</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800 border border-white/10">
           <div
             className="h-full bg-gradient-to-r from-sky-400 to-cyan-400 transition-all duration-300 ease-out"
-            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+            style={{ width: `${Math.min(100, Math.max(5, totalProgress))}%` }}
           />
         </div>
         <div className="mt-3 truncate text-center font-mono text-[11px] text-slate-400">

@@ -42,25 +42,42 @@ export function InstancedRocks() {
       rockGeo.scale(7.2, 7.2, 7.2);
     }
 
+    // Clean PBR material for natural granite/slate rocks
+    // Do NOT use ARM texture as metalnessMap (ARM has AO in Red, Roughness in Green)
+    let rockDiffMap: THREE.Texture | null = null;
+    let rockNorMap: THREE.Texture | null = null;
+
     if (mat && (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
       const stdMat = mat as THREE.MeshStandardMaterial;
-      if (stdMat.map) {
-        stdMat.map.colorSpace = THREE.SRGBColorSpace;
-        stdMat.map.generateMipmaps = true;
-        stdMat.map.anisotropy = quality === 'high' ? 8 : 4;
-      }
-      if (stdMat.normalMap) {
-        stdMat.normalMap.generateMipmaps = true;
-      }
-      stdMat.roughness = 0.82;
-      stdMat.metalness = 0.04;
+      rockDiffMap = stdMat.map;
+      rockNorMap = stdMat.normalMap;
     }
+
+    if (rockDiffMap) {
+      rockDiffMap.colorSpace = THREE.SRGBColorSpace;
+      rockDiffMap.generateMipmaps = true;
+      rockDiffMap.anisotropy = quality === 'high' ? 8 : 4;
+    }
+    if (rockNorMap) {
+      rockNorMap.generateMipmaps = true;
+    }
+
+    const cleanMaterial = new THREE.MeshStandardMaterial({
+      map: rockDiffMap,
+      normalMap: rockNorMap,
+      color: new THREE.Color('#8e928d'), // Natural Himalayan granite / slate tone
+      roughness: 0.88,
+      metalness: 0.0, // Strictly non-metallic
+      envMapIntensity: 0.2, // Low environment reflection
+    });
 
     return {
       rockGeometry: rockGeo,
-      rockMaterial: mat || new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02 }),
+      rockMaterial: cleanMaterial,
     };
   }, [scene, quality]);
+
+  const playerPos = useTrekStore((s) => s.playerPos);
 
   // Compute instance matrices with slope filtering and soil embedding
   const { count, matrices } = useMemo(() => {
@@ -72,11 +89,15 @@ export function InstancedRocks() {
     const quaternion = new THREE.Quaternion();
 
     const transforms: THREE.Matrix4[] = [];
-    const maxCandidates = quality === 'high' ? 350 : quality === 'medium' ? 220 : 120;
+    const maxCandidates = quality === 'high' ? 320 : quality === 'medium' ? 200 : 110;
+    const px = playerPos[0];
+    const pz = playerPos[2];
 
     for (let i = 0; i < maxCandidates; i++) {
-      const x = (random() - 0.5) * 200;
-      const z = 75 - random() * 320; // from trailhead down to -245
+      const radius = 3.0 + random() * 160;
+      const angle = random() * Math.PI * 2;
+      const x = px + Math.cos(angle) * radius;
+      const z = pz + Math.sin(angle) * radius;
 
       const distToPath = getDistanceToPath(x, z);
       // Keep center of walkable trail clear
@@ -84,17 +105,18 @@ export function InstancedRocks() {
 
       // Filter out steep cliff slopes to prevent hovering boulders
       const slope = getTerrainSlope(x, z);
-      if (slope > 0.35) continue;
+      if (slope > 0.38) continue;
 
-      // Favor rocks bordering the dirt trail (2.5 to 8.5) and across meadows
+      // Favor rocks bordering the dirt trail (2.5 to 8.5) and across meadows/moraine
       const isTrailBorder = distToPath >= 2.5 && distToPath <= 8.5;
       if (!isTrailBorder && random() > 0.45) continue;
 
       const y = getTerrainHeight(x, z);
-      const scaleBase = isTrailBorder ? 0.45 + random() * 0.55 : 0.7 + random() * 0.95;
+      // Human scale: boulders 0.5 to 2.8m
+      const scaleBase = isTrailBorder ? 0.45 + random() * 0.55 : 0.65 + random() * 0.95;
 
       // Sink boulder firmly into terrain so base is embedded with no hovering gap
-      position.set(x, y - scaleBase * 0.22, z);
+      position.set(x, y - scaleBase * 0.18, z);
 
       // Random natural orientation
       rotation.set(
@@ -115,7 +137,7 @@ export function InstancedRocks() {
     }
 
     return { count: transforms.length, matrices: transforms };
-  }, [quality]);
+  }, [quality, playerPos]);
 
   useLayoutEffect(() => {
     if (!meshRef.current) return;

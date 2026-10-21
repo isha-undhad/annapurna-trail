@@ -4,8 +4,9 @@ import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
-import { getTerrainHeight, getDistanceToPath, getTerrainSlope } from '@/lib/terrain';
+import { getTerrainHeight, getDistanceToPath, getTerrainSlope, TRAIL_POLYLINE } from '@/lib/terrain';
 import { useTrekStore } from '@/store/useTrekStore';
+import { WORLD_SCALE } from '@/lib/constants';
 import { getTexturePath, configureTexture, QualityLevel } from '@/lib/textures';
 
 function createSeededRandom(seed = 54321) {
@@ -17,9 +18,8 @@ function createSeededRandom(seed = 54321) {
 }
 
 /**
- * Builds multi-tiered alpha-card conifer foliage geometry.
- * Intersecting planar branch cards radiate around the trunk,
- * angled downward to shed snow as in Himalayan firs and deodars.
+ * Builds multi-tiered alpha-card conifer foliage geometry for 18-25m Himalayan pines.
+ * Intersecting branch cards radiate around the trunk, angled downward to shed snow.
  */
 function buildFoliageGeometry(quality: QualityLevel) {
   const cards: { y: number; w: number; h: number; pitch: number; yaw: number }[] = [];
@@ -27,19 +27,19 @@ function buildFoliageGeometry(quality: QualityLevel) {
   const tierConfigs =
     quality === 'low'
       ? [
-          { y: 2.6, w: 4.2, h: 2.0, pitch: -0.26, angles: [0, Math.PI / 2] },
-          { y: 4.2, w: 3.4, h: 1.8, pitch: -0.22, angles: [Math.PI / 4, (3 * Math.PI) / 4] },
-          { y: 5.8, w: 2.6, h: 1.6, pitch: -0.18, angles: [0, Math.PI / 2] },
-          { y: 7.2, w: 1.7, h: 1.4, pitch: -0.14, angles: [Math.PI / 4, (3 * Math.PI) / 4] },
-          { y: 8.2, w: 1.1, h: 1.5, pitch: 0, angles: [0, Math.PI / 2] },
+          { y: 7.0, w: 10.5, h: 5.0, pitch: -0.26, angles: [0, Math.PI / 2] },
+          { y: 12.0, w: 8.5, h: 4.5, pitch: -0.22, angles: [Math.PI / 4, (3 * Math.PI) / 4] },
+          { y: 16.5, w: 6.5, h: 4.0, pitch: -0.18, angles: [0, Math.PI / 2] },
+          { y: 20.5, w: 4.5, h: 3.2, pitch: -0.14, angles: [Math.PI / 4, (3 * Math.PI) / 4] },
+          { y: 23.0, w: 2.5, h: 3.5, pitch: 0, angles: [0, Math.PI / 2] },
         ]
       : [
-          { y: 2.3, w: 4.5, h: 2.1, pitch: -0.28, angles: [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4] },
-          { y: 3.7, w: 3.8, h: 1.9, pitch: -0.24, angles: [Math.PI / 8, (3 * Math.PI) / 8, (5 * Math.PI) / 8, (7 * Math.PI) / 8] },
-          { y: 5.1, w: 3.1, h: 1.7, pitch: -0.20, angles: [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4] },
-          { y: 6.4, w: 2.3, h: 1.5, pitch: -0.16, angles: [Math.PI / 6, Math.PI / 2, (5 * Math.PI) / 6] },
-          { y: 7.5, w: 1.6, h: 1.3, pitch: -0.12, angles: [0, Math.PI / 3, (2 * Math.PI) / 3] },
-          { y: 8.4, w: 1.1, h: 1.6, pitch: 0, angles: [0, Math.PI / 2] },
+          { y: 6.5, w: 11.5, h: 5.2, pitch: -0.28, angles: [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4] },
+          { y: 10.5, w: 9.5, h: 4.8, pitch: -0.24, angles: [Math.PI / 8, (3 * Math.PI) / 8, (5 * Math.PI) / 8, (7 * Math.PI) / 8] },
+          { y: 14.5, w: 7.5, h: 4.2, pitch: -0.20, angles: [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4] },
+          { y: 18.0, w: 5.5, h: 3.6, pitch: -0.16, angles: [Math.PI / 6, Math.PI / 2, (5 * Math.PI) / 6] },
+          { y: 21.0, w: 3.8, h: 3.0, pitch: -0.12, angles: [0, Math.PI / 3, (2 * Math.PI) / 3] },
+          { y: 23.2, w: 2.4, h: 3.5, pitch: 0, angles: [0, Math.PI / 2] },
         ];
 
   tierConfigs.forEach((tier) => {
@@ -121,16 +121,17 @@ export function InstancedTrees() {
   const trunkMeshRef = useRef<THREE.InstancedMesh>(null!);
   const foliageMeshRef = useRef<THREE.InstancedMesh>(null!);
   const quality = useTrekStore((s) => s.quality);
+  const playerPos = useTrekStore((s) => s.playerPos);
   const timeRef = useRef({ value: 0 });
 
-  // Load realistic CC0 Poly Haven pine bark PBR textures
+  // 2K pine bark textures strictly for trunks
   const barkTextures = useTexture({
     color: getTexturePath('bark', 'color.jpg', quality),
     normal: getTexturePath('bark', 'normal.jpg', quality),
     roughness: getTexturePath('bark', 'roughness.jpg', quality),
   });
 
-  // Load realistic CC0 Poly Haven conifer needle branch textures with alpha
+  // Conifer needle branch textures with alpha strictly for foliage cards
   const foliageTextures = useTexture({
     color: getTexturePath('foliage', 'pine_branch.png', quality),
     normal: getTexturePath('foliage', 'pine_branch_normal.png', quality),
@@ -139,30 +140,30 @@ export function InstancedTrees() {
   useLayoutEffect(() => {
     const aniso = quality === 'high' ? 8 : quality === 'medium' ? 4 : 2;
 
-    configureTexture(barkTextures.color, true, aniso, 1, 4);
-    configureTexture(barkTextures.normal, false, aniso, 1, 4);
-    configureTexture(barkTextures.roughness, false, aniso, 1, 4);
+    configureTexture(barkTextures.color, true, aniso, 1, 6);
+    configureTexture(barkTextures.normal, false, aniso, 1, 6);
+    configureTexture(barkTextures.roughness, false, aniso, 1, 6);
 
     configureTexture(foliageTextures.color, true, aniso, 1, 1);
     configureTexture(foliageTextures.normal, false, aniso, 1, 1);
   }, [barkTextures, foliageTextures, quality]);
 
-  // Tapered trunk cylinder geometry
+  // Trunk geometry: ~22m tall with base width 0.7m, top width 0.35m
   const trunkGeometry = useMemo(() => {
-    const geo = new THREE.CylinderGeometry(0.18, 0.44, 8.5, 7);
-    geo.translate(0, 4.25, 0); // Ground base at Y=0
+    const geo = new THREE.CylinderGeometry(0.35, 0.72, 22.0, 8);
+    geo.translate(0, 11.0, 0); // Root base at Y=0
     geo.computeVertexNormals();
     return geo;
   }, []);
 
-  // Trunk PBR material
+  // Trunk PBR material (bark only)
   const trunkMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
       map: barkTextures.color,
       normalMap: barkTextures.normal,
       roughnessMap: barkTextures.roughness,
       roughness: 0.88,
-      metalness: 0.02,
+      metalness: 0.0,
     });
   }, [barkTextures]);
 
@@ -171,16 +172,16 @@ export function InstancedTrees() {
     return buildFoliageGeometry(quality);
   }, [quality]);
 
-  // Foliage material with wind sway vertex shader and alpha testing
+  // Foliage PBR material: lush green base tint, alpha testing, wind sway
   const foliageMaterial = useMemo(() => {
     const mat = new THREE.MeshStandardMaterial({
       map: foliageTextures.color,
-      normalMap: foliageTextures.normal,
+      color: new THREE.Color('#4e8f4c'), // Vibrant Himalayan pine green base tint
       transparent: true,
-      alphaTest: 0.35,
+      alphaTest: 0.22,
       depthWrite: true,
       side: THREE.DoubleSide,
-      roughness: 0.65,
+      roughness: 0.78,
       metalness: 0.0,
     });
 
@@ -196,11 +197,11 @@ export function InstancedTrees() {
         '#include <begin_vertex>',
         `
         #include <begin_vertex>
-        // Mountain wind sway: amplitude increases towards the canopy apex (Y > 1.8)
-        float swayFactor = max(0.0, transformed.y - 1.8) * 0.045;
-        float windWave = sin(uTime * 1.8 + position.x * 0.25 + position.z * 0.25);
+        // Wind sway: increases towards the canopy top (Y > 6.0)
+        float swayFactor = max(0.0, transformed.y - 6.0) * 0.025;
+        float windWave = sin(uTime * 1.8 + position.x * 0.15 + position.z * 0.15);
         transformed.x += windWave * swayFactor;
-        transformed.z += cos(uTime * 1.3 + position.x * 0.15) * (swayFactor * 0.65);
+        transformed.z += cos(uTime * 1.3 + position.x * 0.1) * (swayFactor * 0.7);
         `
       );
     };
@@ -208,7 +209,7 @@ export function InstancedTrees() {
     return mat;
   }, [foliageTextures]);
 
-  // Instance transforms and natural tinting
+  // Instance transforms and zoning by REAL elevation around player
   const { count, matrices, tints } = useMemo(() => {
     const random = createSeededRandom(6789);
     const tempMatrix = new THREE.Matrix4();
@@ -220,11 +221,10 @@ export function InstancedTrees() {
     const transforms: THREE.Matrix4[] = [];
     const colorTints: THREE.Color[] = [];
 
-    // Quality-based density & distance culling
     const maxCandidates = quality === 'high' ? 450 : quality === 'medium' ? 280 : 150;
-    const maxZDistance = quality === 'low' ? -190 : -245;
+    const px = playerPos[0];
+    const pz = playerPos[2];
 
-    // Palette of Himalayan pine needle tones
     const tintPalette = [
       new THREE.Color('#385e38'),
       new THREE.Color('#2e4d2f'),
@@ -233,50 +233,52 @@ export function InstancedTrees() {
       new THREE.Color('#4c734a'),
     ];
 
+    // Spawn trees within 350m of player along the valley slopes
     for (let i = 0; i < maxCandidates; i++) {
-      const x = (random() - 0.5) * 220;
-      const z = 75 - random() * (75 - maxZDistance);
+      const radius = 25 + random() * 320;
+      const angle = random() * Math.PI * 2;
+      const x = px + Math.cos(angle) * radius;
+      const z = pz + Math.sin(angle) * radius;
 
       const distToPath = getDistanceToPath(x, z);
-      // Keep walkable trail clear
-      if (distToPath < 4.8) continue;
+      if (distToPath < 5.0) continue; // Keep walkable trail clear
 
       const y = getTerrainHeight(x, z);
-      // Alpine tree line constraint: no trees on high snow peaks
-      if (y > 22.5) continue;
+      const realElevation = y / WORLD_SCALE;
 
-      // Slope constraint: no trees on steep cliffs/rock
+      // Real elevation zoning:
+      // - 2,000 to 3,200m: dense forest
+      // - 3,200 to 3,800m: sparse alpine trees
+      // - Above 3,800m: NO trees (tree line)
+      if (realElevation < 1400 || realElevation > 3750) continue;
+      if (realElevation > 3200 && random() > 0.35) continue; // Sparse near tree line
+
       const slope = getTerrainSlope(x, z);
-      if (slope > 0.38) continue;
+      if (slope > 0.42) continue; // No trees on steep cliffs
 
-      // Natural valley groves clustering
-      const clusterFavor = Math.exp(-Math.pow(distToPath - 15, 2) / 450);
-      if (distToPath > 24 && random() > clusterFavor && random() > 0.4) continue;
-
-      // Ground trunk base firmly into the terrain
-      position.set(x, y - 0.35, z);
+      // Root trunk firmly into terrain
+      position.set(x, y - 0.4, z);
 
       rotation.set(
-        (random() - 0.5) * 0.05,
+        (random() - 0.5) * 0.04,
         random() * Math.PI * 2,
-        (random() - 0.5) * 0.05
+        (random() - 0.5) * 0.04
       );
       quaternion.setFromEuler(rotation);
 
-      const s = 0.85 + random() * 0.65;
+      const s = 0.85 + random() * 0.35; // ~19m to 26m
       scale.set(s, s * (0.95 + random() * 0.2), s);
 
       tempMatrix.compose(position, quaternion, scale);
       transforms.push(tempMatrix.clone());
 
       const chosenTint = tintPalette[Math.floor(random() * tintPalette.length)].clone();
-      // Slight brightness jitter
-      chosenTint.multiplyScalar(0.92 + random() * 0.16);
+      chosenTint.multiplyScalar(0.95 + random() * 0.15);
       colorTints.push(chosenTint);
     }
 
     return { count: transforms.length, matrices: transforms, tints: colorTints };
-  }, [quality]);
+  }, [quality, playerPos]);
 
   useLayoutEffect(() => {
     if (!trunkMeshRef.current || !foliageMeshRef.current) return;

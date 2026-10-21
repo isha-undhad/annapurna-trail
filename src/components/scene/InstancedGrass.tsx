@@ -6,6 +6,7 @@ import { useFrame } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
 import { getTerrainHeight, getDistanceToPath, getTerrainSlope } from '@/lib/terrain';
 import { useTrekStore } from '@/store/useTrekStore';
+import { WORLD_SCALE } from '@/lib/constants';
 import { getTexturePath, configureTexture } from '@/lib/textures';
 
 function createSeededRandom(seed = 3344) {
@@ -19,6 +20,7 @@ function createSeededRandom(seed = 3344) {
 export function InstancedGrass() {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const quality = useTrekStore((s) => s.quality);
+  const playerPos = useTrekStore((s) => s.playerPos);
   const timeRef = useRef({ value: 0 });
 
   const grassColor = useTexture(getTexturePath('grass', 'color.jpg', quality));
@@ -27,12 +29,10 @@ export function InstancedGrass() {
     configureTexture(grassColor, true, aniso);
   }, [grassColor, quality]);
 
-  // Crossed-blade tapered grass tuft geometry with vertex color gradient
+  // Small, delicate tapered grass tuft geometry (0.35m - 0.55m height, rooted in ground)
   const grassGeometry = useMemo(() => {
-    // 3 intersecting crossed blades, tapered toward the top
     const bladeCount = 3;
-    const vertsPerBlade = 6; // 2 triangles
-    const totalVerts = bladeCount * vertsPerBlade;
+    const totalVerts = bladeCount * 4;
 
     const positions = new Float32Array(totalVerts * 3);
     const normals = new Float32Array(totalVerts * 3);
@@ -40,33 +40,28 @@ export function InstancedGrass() {
     const colors = new Float32Array(totalVerts * 3);
     const indices: number[] = [];
 
-    const baseColor = new THREE.Color('#336e29');
-    const tipColor = new THREE.Color('#68b84d');
+    const baseColor = new THREE.Color('#386b2d');
+    const tipColor = new THREE.Color('#5ea848');
 
-    const widthBase = 0.22;
-    const widthTip = 0.06;
-    const height = 0.62;
+    // Human-scale dimensions: 0.42m high, 0.06m wide base
+    const widthBase = 0.06;
+    const widthTip = 0.015;
+    const height = 0.42;
 
     for (let b = 0; b < bladeCount; b++) {
       const angle = (b * Math.PI) / bladeCount;
       const cosA = Math.cos(angle);
       const sinA = Math.sin(angle);
-      const baseIdx = b * 4;
       const vertOffset = b * 4;
 
-      // 4 quad vertices
-      // v0: bottom left
       const x0 = -widthBase * cosA;
       const z0 = -widthBase * sinA;
-      // v1: bottom right
       const x1 = widthBase * cosA;
       const z1 = widthBase * sinA;
-      // v2: top left
-      const x2 = -widthTip * cosA + sinA * 0.05;
-      const z2 = -widthTip * sinA - cosA * 0.05;
-      // v3: top right
-      const x3 = widthTip * cosA + sinA * 0.05;
-      const z3 = widthTip * sinA - cosA * 0.05;
+      const x2 = -widthTip * cosA;
+      const z2 = -widthTip * sinA;
+      const x3 = widthTip * cosA;
+      const z3 = widthTip * sinA;
 
       const vPos = [
         [x0, 0.0, z0],
@@ -78,8 +73,8 @@ export function InstancedGrass() {
       const vUV = [
         [0, 0],
         [1, 0],
-        [0.15, 1],
-        [0.85, 1],
+        [0.2, 1],
+        [0.8, 1],
       ];
 
       for (let i = 0; i < 4; i++) {
@@ -88,9 +83,9 @@ export function InstancedGrass() {
         positions[idx * 3 + 1] = vPos[i][1];
         positions[idx * 3 + 2] = vPos[i][2];
 
-        normals[idx * 3] = -sinA;
-        normals[idx * 3 + 1] = 0.3;
-        normals[idx * 3 + 2] = cosA;
+        normals[idx * 3] = 0;
+        normals[idx * 3 + 1] = 1;
+        normals[idx * 3 + 2] = 0;
 
         uvs[idx * 2] = vUV[i][0];
         uvs[idx * 2 + 1] = vUV[i][1];
@@ -101,10 +96,9 @@ export function InstancedGrass() {
         colors[idx * 3 + 2] = c.b;
       }
 
-      // Two triangles (double-sided)
       indices.push(
-        baseIdx, baseIdx + 1, baseIdx + 2,
-        baseIdx + 2, baseIdx + 1, baseIdx + 3
+        vertOffset, vertOffset + 1, vertOffset + 2,
+        vertOffset + 2, vertOffset + 1, vertOffset + 3
       );
     }
 
@@ -118,12 +112,12 @@ export function InstancedGrass() {
     return geo;
   }, []);
 
-  // Material with wind sway shader
+  // Material with subtle wind sway shader
   const grassMaterial = useMemo(() => {
     const mat = new THREE.MeshStandardMaterial({
       map: grassColor,
       vertexColors: true,
-      roughness: 0.65,
+      roughness: 0.72,
       side: THREE.DoubleSide,
     });
 
@@ -139,12 +133,11 @@ export function InstancedGrass() {
         '#include <begin_vertex>',
         `
         #include <begin_vertex>
-        // Wind wave: displaces grass blade tips proportional to height
-        float bladeTip = position.y / 0.65;
-        float wave = sin(uTime * 3.2 + position.x * 2.0 + position.z * 1.5) * 0.12 * bladeTip;
-        float gust = cos(uTime * 1.8 + position.z * 0.8) * 0.08 * bladeTip;
-        transformed.x += wave + gust;
-        transformed.z += wave * 0.6;
+        // Displace blade tips proportional to height
+        float bladeTip = position.y / 0.45;
+        float wave = sin(uTime * 3.0 + position.x * 2.5 + position.z * 2.0) * 0.08 * bladeTip;
+        transformed.x += wave;
+        transformed.z += wave * 0.5;
         `
       );
     };
@@ -152,7 +145,7 @@ export function InstancedGrass() {
     return mat;
   }, [grassColor]);
 
-  // Compute instance matrices
+  // Dynamic instance matrices centered around player
   const { count, matrices } = useMemo(() => {
     const random = createSeededRandom(7788);
     const tempMatrix = new THREE.Matrix4();
@@ -162,36 +155,46 @@ export function InstancedGrass() {
     const quaternion = new THREE.Quaternion();
 
     const transforms: THREE.Matrix4[] = [];
-    const maxCandidates = quality === 'high' ? 850 : quality === 'medium' ? 500 : 250;
+    const maxCandidates = quality === 'high' ? 650 : quality === 'medium' ? 380 : 180;
+    const px = playerPos[0];
+    const pz = playerPos[2];
 
     for (let i = 0; i < maxCandidates; i++) {
-      const x = (random() - 0.5) * 160;
-      const z = 75 - random() * 320; // from trailhead down to -245
+      const radius = 2.0 + random() * 75; // Within 75m of player
+      const angle = random() * Math.PI * 2;
+      const x = px + Math.cos(angle) * radius;
+      const z = pz + Math.sin(angle) * radius;
 
       const distToPath = getDistanceToPath(x, z);
-      // Place near trail edges and across meadows
-      if (distToPath < 1.8) continue; // Keep center trail clean
+      if (distToPath < 1.6) continue; // Keep trail clear
 
       const y = getTerrainHeight(x, z);
-      if (y > 20.0) continue; // No grass on snow peaks
+      const realAlt = y / WORLD_SCALE;
+
+      // Real elevation zoning:
+      // Below 2,000m: dense
+      // 2,000 to 3,600m: meadow tufts
+      // Above 3,800m: no grass (moraine/snow)
+      if (realAlt > 3750) continue;
+      if (realAlt > 3200 && random() > 0.4) continue;
 
       const slope = getTerrainSlope(x, z);
-      if (slope > 0.3) continue; // No grass on sheer cliffs
+      if (slope > 0.32) continue; // No grass on rocky cliffs
 
-      // Firmly grounded on the terrain height
+      // Root tuft into the soil so it is never floating
       position.set(x, y - 0.04, z);
       rotation.set(0, random() * Math.PI * 2, 0);
       quaternion.setFromEuler(rotation);
 
-      const s = 0.85 + random() * 0.45;
-      scale.set(s, s * (0.9 + random() * 0.3), s);
+      const s = 0.8 + random() * 0.4;
+      scale.set(s, s * (0.85 + random() * 0.3), s);
 
       tempMatrix.compose(position, quaternion, scale);
       transforms.push(tempMatrix.clone());
     }
 
     return { count: transforms.length, matrices: transforms };
-  }, [quality]);
+  }, [quality, playerPos]);
 
   useLayoutEffect(() => {
     if (!meshRef.current) return;
@@ -201,7 +204,6 @@ export function InstancedGrass() {
     meshRef.current.instanceMatrix.needsUpdate = true;
   }, [matrices]);
 
-  // THREE.Timer replacement for THREE.Clock
   const timerRef = useRef<THREE.Timer | null>(null);
   if (!timerRef.current) {
     timerRef.current = new THREE.Timer();
@@ -214,7 +216,7 @@ export function InstancedGrass() {
     }
   });
 
-  if (quality === 'low') return null; // Skip grass tufts on low mobile mode for max FPS
+  if (quality === 'low') return null;
 
   return (
     <instancedMesh

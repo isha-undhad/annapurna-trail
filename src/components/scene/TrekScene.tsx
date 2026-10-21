@@ -10,6 +10,7 @@ import { InstancedTrees } from './InstancedTrees';
 import { InstancedGrass } from './InstancedGrass';
 import { InstancedRocks } from './InstancedRocks';
 import { Cairns } from './Cairns';
+import { Signposts } from './Signposts';
 import { PlayerController } from './PlayerController';
 import { PostProcessing } from './PostProcessing';
 import { useTrekStore } from '@/store/useTrekStore';
@@ -21,7 +22,7 @@ export function TrekScene() {
   return (
     <Canvas
       shadows={{ type: THREE.PCFShadowMap }}
-      camera={{ fov: 65, near: 0.1, far: 1400, position: [0, 3.5, 75] }}
+      camera={{ fov: 65, near: 0.1, far: 1800, position: [0, 210, 0] }}
       dpr={dpr}
       gl={{
         antialias: quality !== 'low',
@@ -73,6 +74,7 @@ export function TrekScene() {
         <InstancedGrass />
         <InstancedRocks />
         <Cairns />
+        <Signposts />
       </Suspense>
 
       {/* First-person player controller */}

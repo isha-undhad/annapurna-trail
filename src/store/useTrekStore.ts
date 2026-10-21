@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { START_POSITION, calculateSimulatedElevation } from '@/lib/terrain';
+import { START_POSITION, getRealElevationMeters } from '@/lib/terrain';
 
 export type GameState = 'landing' | 'trekking' | 'paused';
 export type QualityLevel = 'low' | 'medium' | 'high';
@@ -45,6 +45,11 @@ interface TrekStore {
   elevation: number;
   setElevation: (elev: number) => void;
 
+  // Teleportation (dev menu)
+  teleportTarget: [number, number, number] | null;
+  teleportTo: (pos: [number, number, number]) => void;
+  clearTeleport: () => void;
+
   // Mobile virtual inputs
   virtualJoystick: VirtualJoystickState;
   setVirtualJoystick: (val: Partial<VirtualJoystickState>) => void;
@@ -60,10 +65,11 @@ export const useTrekStore = create<TrekStore>((set) => ({
     set({
       gameState: 'trekking',
       playerPos: [...START_POSITION],
-      elevation: calculateSimulatedElevation(START_POSITION[2]),
+      elevation: getRealElevationMeters(START_POSITION[0], START_POSITION[2]),
       distanceWalked: 0,
       isMoving: false,
       isSprinting: false,
+      teleportTarget: null,
     }),
   exitTrek: () =>
     set({
@@ -87,7 +93,7 @@ export const useTrekStore = create<TrekStore>((set) => ({
   setPlayerPos: (playerPos) =>
     set({
       playerPos,
-      elevation: calculateSimulatedElevation(playerPos[2]),
+      elevation: getRealElevationMeters(playerPos[0], playerPos[2]),
     }),
   playerHeading: 0,
   setPlayerHeading: (playerHeading) => set({ playerHeading }),
@@ -98,8 +104,18 @@ export const useTrekStore = create<TrekStore>((set) => ({
   distanceWalked: 0,
   addDistanceWalked: (dist) =>
     set((state) => ({ distanceWalked: Math.round(state.distanceWalked + dist) })),
-  elevation: calculateSimulatedElevation(START_POSITION[2]),
+  elevation: getRealElevationMeters(START_POSITION[0], START_POSITION[2]),
   setElevation: (elevation) => set({ elevation }),
+
+  // Teleportation
+  teleportTarget: null,
+  teleportTo: (target) =>
+    set({
+      teleportTarget: target,
+      playerPos: target,
+      elevation: getRealElevationMeters(target[0], target[2]),
+    }),
+  clearTeleport: () => set({ teleportTarget: null }),
 
   virtualJoystick: { x: 0, y: 0, active: false },
   setVirtualJoystick: (val) =>

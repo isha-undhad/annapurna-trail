@@ -201,7 +201,7 @@ export function Mountains() {
       // Custom color map blending with triplanar mountain textures & atmospheric haze
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <map_fragment>',
-        `
+        `#include <map_fragment>
         float slope = 1.0 - abs(normalize(vWorldNorm).y);
         float alt = vWorldPos.y;
 
@@ -249,7 +249,7 @@ export function Mountains() {
 
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
-        `
+        `#include <roughnessmap_fragment>
         float rRock = texture2D(uRockRough, uvX).r * triWeight.x +
                       texture2D(uRockRough, uvY).r * triWeight.y +
                       texture2D(uRockRough, uvZ).r * triWeight.z;

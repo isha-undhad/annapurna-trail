@@ -47,13 +47,26 @@ export function PlayerController() {
   const mobileYaw = useRef(0);
   const mobilePitch = useRef(0);
 
-  // Initialize camera position on mount
+  const teleportTarget = useTrekStore((s) => s.teleportTarget);
+  const clearTeleport = useTrekStore((s) => s.clearTeleport);
+
+  // Initialize camera position on mount at Nayapul facing along trail
   useEffect(() => {
     const startY = getTerrainHeight(START_POSITION[0], START_POSITION[2]) + EYE_HEIGHT;
     playerPosition.current.set(START_POSITION[0], startY, START_POSITION[2]);
     camera.position.copy(playerPosition.current);
     camera.rotation.set(0, 0, 0);
   }, [camera]);
+
+  // Handle waypoint teleportation
+  useEffect(() => {
+    if (teleportTarget) {
+      const targetY = getTerrainHeight(teleportTarget[0], teleportTarget[2]) + EYE_HEIGHT;
+      playerPosition.current.set(teleportTarget[0], targetY, teleportTarget[2]);
+      camera.position.copy(playerPosition.current);
+      clearTeleport();
+    }
+  }, [teleportTarget, camera, clearTeleport]);
 
   // Desktop keyboard listeners
   useEffect(() => {

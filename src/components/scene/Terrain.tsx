@@ -1,15 +1,58 @@
 'use client';
 
-import React, { useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
-import { getTerrainHeight, WORLD_BOUNDS } from '@/lib/terrain';
+import { getTerrainHeight, isHeightmapLoaded, WAYPOINTS } from '@/lib/terrain';
+import { WORLD_SCALE } from '@/lib/constants';
 import { useTrekStore } from '@/store/useTrekStore';
 import { getTexturePath, configureTexture } from '@/lib/textures';
 
+// Chunk size in game units (~500 real meters per chunk)
+const CHUNK_SIZE = 120;
+// Render chunk radius around player
+const CHUNK_RADIUS = 3; // 7x7 grid = 49 chunks around player
+
+interface ChunkInfo {
+  key: string;
+  cx: number;
+  cz: number;
+  lod: 'high' | 'medium' | 'low';
+}
+
+function getChunkLOD(distSq: number): 'high' | 'medium' | 'low' {
+  if (distSq <= 1.5 * 1.5) return 'high';
+  if (distSq <= 2.8 * 2.8) return 'medium';
+  return 'low';
+}
+
+function createChunkGeometry(cx: number, cz: number, lod: 'high' | 'medium' | 'low') {
+  const segments = lod === 'high' ? 36 : lod === 'medium' ? 18 : 10;
+  const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, segments, segments);
+  geo.rotateX(-Math.PI / 2);
+
+  const worldOffsetX = cx * CHUNK_SIZE;
+  const worldOffsetZ = cz * CHUNK_SIZE;
+  geo.translate(worldOffsetX, 0, worldOffsetZ);
+
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const y = getTerrainHeight(x, z);
+    pos.setY(i, y);
+  }
+
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export function Terrain() {
-  const meshRef = useRef<THREE.Mesh>(null!);
   const quality = useTrekStore((s) => s.quality);
+  const playerPos = useTrekStore((s) => s.playerPos);
+  const [activeChunks, setActiveChunks] = useState<ChunkInfo[]>([]);
+  const lastChunkRef = useRef({ cx: 9999, cz: 9999 });
 
   // Load the 4 PBR texture sets from /public/textures (1K on low, 2K on medium/high)
   const textures = useTexture({
@@ -59,61 +102,58 @@ export function Terrain() {
     configureTexture(textures.snowAO, false, aniso);
   }, [textures, quality]);
 
-  // Generate dense heightfield mesh centered over full world bounds (X: ±180, Z: -290 to +130)
-  const geometry = useMemo(() => {
-    const width = WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX + 60; // 360
-    const depth = WORLD_BOUNDS.maxZ - WORLD_BOUNDS.minZ + 60; // 420
-    const centerZ = (WORLD_BOUNDS.minZ + WORLD_BOUNDS.maxZ) / 2; // -80
+  // Dynamic chunk management centered on player
+  useEffect(() => {
+    const px = playerPos[0];
+    const pz = playerPos[2];
+    const curCx = Math.round(px / CHUNK_SIZE);
+    const curCz = Math.round(pz / CHUNK_SIZE);
 
-    const geo = new THREE.PlaneGeometry(width, depth, 150, 180);
-    geo.rotateX(-Math.PI / 2);
-    geo.translate(0, 0, centerZ);
-
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const y = getTerrainHeight(x, z);
-      pos.setY(i, y);
+    if (curCx === lastChunkRef.current.cx && curCz === lastChunkRef.current.cz && activeChunks.length > 0) {
+      return;
     }
+    lastChunkRef.current = { cx: curCx, cz: curCz };
 
-    geo.computeVertexNormals();
-    return geo;
-  }, []);
+    const newChunks: ChunkInfo[] = [];
+    for (let dx = -CHUNK_RADIUS; dx <= CHUNK_RADIUS; dx++) {
+      for (let dz = -CHUNK_RADIUS; dz <= CHUNK_RADIUS; dz++) {
+        const cx = curCx + dx;
+        const cz = curCz + dz;
+        const distSq = dx * dx + dz * dz;
+        const lod = getChunkLOD(distSq);
+        newChunks.push({
+          key: `${cx}_${cz}_${lod}`,
+          cx,
+          cz,
+          lod,
+        });
+      }
+    }
+    setActiveChunks(newChunks);
+  }, [playerPos, activeChunks.length]);
 
-  // Material with triplanar rock mapping, macro color variation, and soft trail blending
-  const material = useMemo(() => {
+  // Robust PBR splat material with triplanar rock, macro variation, and real elevation zoning
+  const terrainMaterial = useMemo(() => {
     const mat = new THREE.MeshStandardMaterial({
-      roughness: 0.75,
-      metalness: 0.02,
+      roughness: 0.82,
+      metalness: 0.0,
+      side: THREE.FrontSide,
     });
 
     mat.onBeforeCompile = (shader) => {
-      // Pass texture uniforms
       shader.uniforms.uGrassColor = { value: textures.grassColor };
-      shader.uniforms.uGrassNormal = { value: textures.grassNormal };
-      shader.uniforms.uGrassRough = { value: textures.grassRough };
       shader.uniforms.uGrassAO = { value: textures.grassAO };
-
       shader.uniforms.uDirtColor = { value: textures.dirtColor };
-      shader.uniforms.uDirtNormal = { value: textures.dirtNormal };
-      shader.uniforms.uDirtRough = { value: textures.dirtRough };
       shader.uniforms.uDirtAO = { value: textures.dirtAO };
-
       shader.uniforms.uRockColor = { value: textures.rockColor };
-      shader.uniforms.uRockNormal = { value: textures.rockNormal };
-      shader.uniforms.uRockRough = { value: textures.rockRough };
       shader.uniforms.uRockAO = { value: textures.rockAO };
-
       shader.uniforms.uSnowColor = { value: textures.snowColor };
-      shader.uniforms.uSnowNormal = { value: textures.snowNormal };
-      shader.uniforms.uSnowRough = { value: textures.snowRough };
       shader.uniforms.uSnowAO = { value: textures.snowAO };
+      shader.uniforms.uWorldScale = { value: WORLD_SCALE };
 
-      // Vertex shader injections
       shader.vertexShader = `
-        varying vec3 vWorldPosition;
-        varying vec3 vWorldNormal;
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
         ${shader.vertexShader}
       `;
 
@@ -121,79 +161,68 @@ export function Terrain() {
         '#include <worldpos_vertex>',
         `
         #include <worldpos_vertex>
-        vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
-        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vWorldNorm = normalize(mat3(modelMatrix) * normal);
         `
       );
 
-      // Fragment shader injections
       shader.fragmentShader = `
-        varying vec3 vWorldPosition;
-        varying vec3 vWorldNormal;
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
 
         uniform sampler2D uGrassColor;
-        uniform sampler2D uGrassNormal;
-        uniform sampler2D uGrassRough;
         uniform sampler2D uGrassAO;
-
         uniform sampler2D uDirtColor;
-        uniform sampler2D uDirtNormal;
-        uniform sampler2D uDirtRough;
         uniform sampler2D uDirtAO;
-
         uniform sampler2D uRockColor;
-        uniform sampler2D uRockNormal;
-        uniform sampler2D uRockRough;
         uniform sampler2D uRockAO;
-
         uniform sampler2D uSnowColor;
-        uniform sampler2D uSnowNormal;
-        uniform sampler2D uSnowRough;
         uniform sampler2D uSnowAO;
+        uniform float uWorldScale;
 
         ${shader.fragmentShader}
       `;
 
-      // Custom color map blending with triplanar rock & macro variation
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <map_fragment>',
-        `
-        // 1. Trail path calculation in GLSL
-        float pathX = sin(vWorldPosition.z * 0.026) * 18.0 +
-                      sin(vWorldPosition.z * 0.062 + 1.1) * 7.0 +
-                      cos(vWorldPosition.z * 0.014) * 4.5;
-        float distToPath = abs(vWorldPosition.x - pathX);
+        `#include <map_fragment>
+        // 1. REAL ELEVATION & SLOPE ZONING
+        float realAlt = vWorldPos.y / max(0.001, uWorldScale);
+        float slope = 1.0 - abs(normalize(vWorldNorm).y);
 
-        // Soft organic trail dirt edge perturbation
-        float trailPerturb = sin(vWorldPosition.z * 0.28) * 0.35 + cos(vWorldPosition.x * 0.45) * 0.25;
-        float organicDist = distToPath + trailPerturb;
-        float wDirt = 1.0 - smoothstep(1.3, 4.4, organicDist);
+        // Zone 1: below 2,000m: green farmland and meadow
+        // Zone 2: 2,000 to 3,200m: dense forest floor & trail dirt
+        // Zone 3: 3,200 to 3,800m: alpine meadow & rock moraine
+        // Zone 4: above 3,800m: barren rock, moraine, snow patches
+        // Zone 5: high peaks (>4,800m): permanent snow and glacial ice
 
-        // 2. Slope & Altitude
-        float slope = 1.0 - abs(normalize(vWorldNormal).y);
-        float alt = vWorldPosition.y;
+        float wSnow = smoothstep(3600.0, 4800.0, realAlt) * (1.0 - smoothstep(0.45, 0.75, slope));
+        float wRock = smoothstep(0.26, 0.52, slope);
 
-        // Rock on steep slopes
-        float wRock = smoothstep(0.24, 0.55, slope);
-        // Snow at high altitude (above ~22m) on gentle/medium slopes
-        float wSnow = smoothstep(21.0, 34.0, alt) * (1.0 - smoothstep(0.48, 0.75, slope));
-        // Grass on remaining gentle valley slopes
-        float wGrass = max(0.0, 1.0 - (wDirt * 0.92 + wRock + wSnow));
+        // High peaks permanent snow
+        if (realAlt > 4600.0) {
+          wSnow = max(wSnow, smoothstep(4600.0, 5800.0, realAlt));
+        }
 
-        // Normalize weights
-        float totalWeight = wDirt + wRock + wSnow + wGrass + 0.0001;
-        wDirt /= totalWeight;
-        wRock /= totalWeight;
-        wSnow /= totalWeight;
-        wGrass /= totalWeight;
+        // Dirt trail along valley floor
+        float wDirt = smoothstep(1800.0, 3200.0, realAlt) * (1.0 - wRock) * 0.35;
 
-        // 3. Large-Scale Macro Color Variation across terrain (hides tiling)
-        float macroNoise = sin(vWorldPosition.x * 0.018 + sin(vWorldPosition.z * 0.015) * 2.5) * 0.5 + 0.5;
+        // Meadow grass on remaining slopes below 3,800m
+        float wGrass = max(0.0, (1.0 - smoothstep(3200.0, 3850.0, realAlt)) * (1.0 - (wRock + wSnow)));
+
+        float totalW = wGrass + wDirt + wRock + wSnow + 0.0001;
+        wGrass /= totalW;
+        wDirt /= totalW;
+        wRock /= totalW;
+        wSnow /= totalW;
+
+        // 2. Macro color variation noise across valley (hides repetition)
+        float macroNoise = sin(vWorldPos.x * 0.015 + sin(vWorldPos.z * 0.012) * 2.5) * 0.5 + 0.5;
         vec3 macroTint = mix(vec3(0.96, 1.04, 0.95), vec3(1.04, 0.98, 0.92), macroNoise);
 
-        // 4. Ground textures with dual-scale UV tiling
-        vec2 uvDense = vWorldPosition.xz * 0.12;
-        vec2 uvSparse = vWorldPosition.xz * 0.022;
+        // 3. Ground texture sampling with dual UV scaling
+        vec2 uvDense = vWorldPos.xz * 0.12;
+        vec2 uvSparse = vWorldPos.xz * 0.022;
 
         vec4 colGrass = mix(texture2D(uGrassColor, uvDense), texture2D(uGrassColor, uvSparse), 0.35) * vec4(macroTint, 1.0);
         float aoGrass = texture2D(uGrassAO, uvDense).r;
@@ -204,48 +233,37 @@ export function Terrain() {
         vec4 colSnow  = mix(texture2D(uSnowColor, uvDense * 0.8), texture2D(uSnowColor, uvSparse), 0.32);
         float aoSnow  = texture2D(uSnowAO, uvDense * 0.8).r;
 
-        // 5. TRIPLANAR MAPPING FOR ROCK (Eliminates stretching on steep cliff faces)
-        vec3 triWeight = pow(abs(normalize(vWorldNormal)), vec3(4.0));
+        // 4. Triplanar mapping for steep rock cliff faces (zero stretching)
+        vec3 triWeight = pow(abs(normalize(vWorldNorm)), vec3(4.0));
         triWeight /= (triWeight.x + triWeight.y + triWeight.z + 0.0001);
 
         float rockScale = 0.045;
-        vec2 uvRockX = vWorldPosition.zy * rockScale;
-        vec2 uvRockY = vWorldPosition.xz * rockScale;
-        vec2 uvRockZ = vWorldPosition.xy * rockScale;
-
-        vec4 colRock = texture2D(uRockColor, uvRockX) * triWeight.x +
-                       texture2D(uRockColor, uvRockY) * triWeight.y +
-                       texture2D(uRockColor, uvRockZ) * triWeight.z;
-        float aoRock = texture2D(uRockAO, uvRockX).r * triWeight.x +
-                       texture2D(uRockAO, uvRockY).r * triWeight.y +
-                       texture2D(uRockAO, uvRockZ).r * triWeight.z;
+        vec4 colRock = texture2D(uRockColor, vWorldPos.zy * rockScale) * triWeight.x +
+                       texture2D(uRockColor, vWorldPos.xz * rockScale) * triWeight.y +
+                       texture2D(uRockColor, vWorldPos.xy * rockScale) * triWeight.z;
+        float aoRock = texture2D(uRockAO, vWorldPos.zy * rockScale).r * triWeight.x +
+                       texture2D(uRockAO, vWorldPos.xz * rockScale).r * triWeight.y +
+                       texture2D(uRockAO, vWorldPos.xy * rockScale).r * triWeight.z;
 
         // Natural sunlight boost
-        colGrass.rgb *= vec3(1.18, 1.28, 1.12);
-        colDirt.rgb  *= vec3(1.12, 1.08, 1.04);
-        colRock.rgb  *= vec3(1.20, 1.20, 1.24);
+        colGrass.rgb *= vec3(1.15, 1.25, 1.10);
+        colDirt.rgb  *= vec3(1.10, 1.06, 1.02);
+        colRock.rgb  *= vec3(1.18, 1.18, 1.22);
+        colSnow.rgb  *= vec3(1.08, 1.10, 1.14);
 
-        // Splat color & AO integration
+        // Blended PBR color and AO
         vec4 splatColor = colGrass * wGrass + colDirt * wDirt + colRock * wRock + colSnow * wSnow;
         float blendedAO = aoGrass * wGrass + aoDirt * wDirt + aoRock * wRock + aoSnow * wSnow;
-        splatColor.rgb *= mix(0.72, 1.0, blendedAO);
+        splatColor.rgb *= mix(0.75, 1.0, blendedAO);
 
         diffuseColor = splatColor;
         `
       );
 
-      // Custom roughness map blending
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
-        `
-        float rGrass = texture2D(uGrassRough, uvDense).r;
-        float rDirt  = texture2D(uDirtRough, uvDense * 1.3).r;
-        float rRock  = texture2D(uRockRough, uvRockX).r * triWeight.x +
-                       texture2D(uRockRough, uvRockY).r * triWeight.y +
-                       texture2D(uRockRough, uvRockZ).r * triWeight.z;
-        float rSnow  = texture2D(uSnowRough, uvDense * 0.8).r;
-
-        roughnessFactor = rGrass * wGrass + rDirt * wDirt + rRock * wRock + rSnow * wSnow;
+        `#include <roughnessmap_fragment>
+        roughnessFactor = 0.82;
         `
       );
     };
@@ -254,12 +272,40 @@ export function Terrain() {
   }, [textures]);
 
   return (
+    <group>
+      {activeChunks.map((chunk) => (
+        <ChunkMesh
+          key={chunk.key}
+          cx={chunk.cx}
+          cz={chunk.cz}
+          lod={chunk.lod}
+          material={terrainMaterial}
+        />
+      ))}
+    </group>
+  );
+}
+
+interface ChunkMeshProps {
+  cx: number;
+  cz: number;
+  lod: 'high' | 'medium' | 'low';
+  material: THREE.Material;
+}
+
+function ChunkMesh({ cx, cz, lod, material }: ChunkMeshProps) {
+  const meshRef = useRef<THREE.Mesh>(null!);
+  const geometry = useMemo(() => {
+    return createChunkGeometry(cx, cz, lod);
+  }, [cx, cz, lod]);
+
+  return (
     <mesh
       ref={meshRef}
       geometry={geometry}
       material={material}
       receiveShadow
-      castShadow
+      castShadow={lod === 'high'}
     />
   );
 }

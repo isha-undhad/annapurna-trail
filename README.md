@@ -167,11 +167,22 @@ All real-world HDRIs, PBR textures, and 3D photogrammetry models are licensed un
 | **Needle Foliage** | `pine_tree_01` (Branch Needle Cutout + Normal) | `/public/textures/foliage/` | [CC0](https://polyhaven.com/license) |
 | **3D Rock Model** | `rock_07` (1K GLTF + Bin + Textures) | `/public/models/rock_07/` | [CC0](https://polyhaven.com/license) |
 
----
+## 🗺️ Real-World Terrain Data & Open Source Attributions
 
-## ⚙️ Offline Procedural Fallback Generator
+The terrain elevation, trail polylines, and village milestones are baked from authoritative open datasets:
 
-The original procedural asset generator script is preserved at `scripts/generate-assets.js`:
-- **Role**: Offline fallback only.
-- **Function**: Procedurally generates synthetic 512px canvas texture maps (grass, dirt, rock, snow, sky) in environments where external network access to Poly Haven is unavailable.
-- **Usage**: `node scripts/generate-assets.js`
+1. **OpenStreetMap**:
+   - **Data**: Annapurna Base Camp Trek (hiking route Relation 17548991) and verified Himalayan village milestone nodes from Nayapul to ABC.
+   - **Attribution**: © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright). Licensed under the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/).
+2. **AWS Terrain Tiles (Mapzen / Nextzen Terrarium)**:
+   - **Data**: 30m resolution digital elevation model (DEM) decoded from Terrarium PNG tiles (`elevation in meters = (R*256 + G + B/256) - 32768`).
+   - **Attribution**: Mapzen Terrain Tiles sourced from USGS 3D Elevation Program (3DEP), Shuttle Radar Topography Mission (SRTM), and open government datasets. Hosted on AWS Open Data.
+
+### Regenerating Real Terrain Data
+To re-fetch and bake the real-world 1536×1536 Float32 DEM heightmap and OSM route metadata:
+```bash
+node scripts/fetch-terrain.js
+```
+Outputs:
+- `/public/data/heightmap.bin`: 9.00 MB Float32 raw DEM binary grid.
+- `/public/data/terrain-meta.json`: 31 KB metadata with geographic bounds, 366-point trail polyline, and 17 village milestones.
