@@ -110,6 +110,12 @@ export function LandingScreen() {
                 <span>Move in 4 directions</span>
               </li>
               <li className="flex items-center gap-2">
+                <kbd className="rounded border border-sky-500/50 bg-sky-950/60 px-1.5 py-0.5 font-mono text-sky-200 font-bold">
+                  V
+                </kbd>
+                <span>Switch Camera (1st, 3rd Follow, Wide, Orbit)</span>
+              </li>
+              <li className="flex items-center gap-2">
                 <kbd className="rounded border border-slate-600 bg-slate-800 px-1.5 py-0.5 font-mono text-slate-200">
                   Shift
                 </kbd>
@@ -117,9 +123,9 @@ export function LandingScreen() {
               </li>
               <li className="flex items-center gap-2">
                 <kbd className="rounded border border-slate-600 bg-slate-800 px-1.5 py-0.5 font-mono text-slate-200">
-                  Mouse Look
+                  Mouse Look / Scroll
                 </kbd>
-                <span>Click screen to look around</span>
+                <span>Look around • Scroll to zoom orbit</span>
               </li>
               <li className="flex items-center gap-2">
                 <kbd className="rounded border border-slate-600 bg-slate-800 px-1.5 py-0.5 font-mono text-slate-200">
@@ -143,22 +149,22 @@ export function LandingScreen() {
                 <span>Left virtual joystick to move</span>
               </li>
               <li className="flex items-center gap-2">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-500/20 text-sky-400 text-[10px]">
+                  📷
+                </span>
+                <span>Tap "Cam" button to switch camera views</span>
+              </li>
+              <li className="flex items-center gap-2">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 text-[10px]">
                   👆
                 </span>
-                <span>Drag anywhere on right to look</span>
+                <span>Drag on right side to rotate camera / orbit</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 text-[10px]">
                   ⚡
                 </span>
                 <span>Push joystick to outer edge to sprint</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 text-[10px]">
-                  ⛰️
-                </span>
-                <span>Auto ground terrain collision</span>
               </li>
             </ul>
           </div>

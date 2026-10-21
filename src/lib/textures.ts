@@ -8,7 +8,8 @@ export type QualityLevel = 'low' | 'medium' | 'high';
  * In 'medium' and 'high' mode, selects full 2K Poly Haven PBR textures.
  */
 export function getTexturePath(category: string, filename: string, quality: QualityLevel): string {
-  if (quality === 'low') {
+  // Use 1K textures on Medium and Low, and full 2K only on High
+  if (quality === 'low' || quality === 'medium') {
     const extMatch = filename.match(/\.(jpg|png)$/);
     if (extMatch) {
       const ext = extMatch[0];

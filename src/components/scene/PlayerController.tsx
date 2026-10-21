@@ -4,30 +4,28 @@ import React, { useEffect, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { PointerLockControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { useTrekStore } from '@/store/useTrekStore';
 import {
   getTerrainHeight,
   clampPlayerPosition,
   START_POSITION,
+  getRealElevationMeters,
 } from '@/lib/terrain';
+import { useTrekStore, playerTelemetry, CameraMode } from '@/store/useTrekStore';
 
 const WALK_SPEED = 5.2; // meters/sec
 const SPRINT_SPEED = 9.2; // meters/sec
 const EYE_HEIGHT = 1.7; // standard eye height
 
 export function PlayerController() {
-  const { camera } = useThree();
+  const { camera, gl } = useThree();
   const controlsRef = useRef<React.ComponentRef<typeof PointerLockControls>>(null);
 
   // Zustand bindings
   const gameState = useTrekStore((s) => s.gameState);
   const isMobile = useTrekStore((s) => s.isMobile);
   const setIsPointerLocked = useTrekStore((s) => s.setIsPointerLocked);
-  const setPlayerPos = useTrekStore((s) => s.setPlayerPos);
-  const setPlayerHeading = useTrekStore((s) => s.setPlayerHeading);
-  const setIsMoving = useTrekStore((s) => s.setIsMoving);
-  const setIsSprinting = useTrekStore((s) => s.setIsSprinting);
-  const addDistanceWalked = useTrekStore((s) => s.addDistanceWalked);
+  const cameraMode = useTrekStore((s) => s.cameraMode);
+  const cycleCameraMode = useTrekStore((s) => s.cycleCameraMode);
 
   // Keyboard state
   const keys = useRef({
@@ -39,21 +37,41 @@ export function PlayerController() {
   });
 
   // Player position vector in horizontal plane
-  const playerPosition = useRef(new THREE.Vector3(START_POSITION[0], START_POSITION[1] + EYE_HEIGHT, START_POSITION[2]));
+  const playerPosition = useRef(
+    new THREE.Vector3(START_POSITION[0], START_POSITION[1] + EYE_HEIGHT, START_POSITION[2])
+  );
+  const trekkerYaw = useRef(0); // Facing angle of trekker in radians
+
+  // Camera angles (yaw and pitch in radians)
+  const camYaw = useRef(0);
+  const camPitch = useRef(0.12);
+  const orbitDistance = useRef(6.5); // Default orbit radius in meters
+
+  // Smooth camera position and look target for blending (Requirement 1)
+  const currentCamPos = useRef(
+    new THREE.Vector3(START_POSITION[0], START_POSITION[1] + EYE_HEIGHT, START_POSITION[2])
+  );
+  const currentLookTarget = useRef(
+    new THREE.Vector3(START_POSITION[0], START_POSITION[1] + EYE_HEIGHT, START_POSITION[2] + 1)
+  );
+
   const bobTimer = useRef(0);
   const currentBob = useRef(0);
+  const hudTimer = useRef(0);
+  const distanceAccum = useRef(0);
 
-  // Mobile look angles (yaw & pitch in radians)
-  const mobileYaw = useRef(0);
-  const mobilePitch = useRef(0);
+  // Drag interaction state when pointer is not locked
+  const isMouseDown = useRef(false);
+  const lastMousePos = useRef({ x: 0, y: 0 });
 
   const teleportTarget = useTrekStore((s) => s.teleportTarget);
   const clearTeleport = useTrekStore((s) => s.clearTeleport);
 
-  // Initialize camera position on mount at Nayapul facing along trail
+  // Initialize camera position on mount at Nayapul
   useEffect(() => {
     const startY = getTerrainHeight(START_POSITION[0], START_POSITION[2]) + EYE_HEIGHT;
     playerPosition.current.set(START_POSITION[0], startY, START_POSITION[2]);
+    currentCamPos.current.copy(playerPosition.current);
     camera.position.copy(playerPosition.current);
     camera.rotation.set(0, 0, 0);
   }, [camera]);
@@ -63,14 +81,26 @@ export function PlayerController() {
     if (teleportTarget) {
       const targetY = getTerrainHeight(teleportTarget[0], teleportTarget[2]) + EYE_HEIGHT;
       playerPosition.current.set(teleportTarget[0], targetY, teleportTarget[2]);
-      camera.position.copy(playerPosition.current);
+      currentCamPos.current.set(teleportTarget[0], targetY, teleportTarget[2]);
+      camera.position.copy(currentCamPos.current);
+
+      playerTelemetry.pos[0] = teleportTarget[0];
+      playerTelemetry.pos[1] = targetY - EYE_HEIGHT;
+      playerTelemetry.pos[2] = teleportTarget[2];
+      playerTelemetry.groundY = targetY - EYE_HEIGHT;
+      playerTelemetry.elevation = getRealElevationMeters(teleportTarget[0], teleportTarget[2]);
       clearTeleport();
     }
   }, [teleportTarget, camera, clearTeleport]);
 
-  // Desktop keyboard listeners
+  // Desktop keyboard & mouse listeners (Key V, WASD, Wheel Zoom, Drag)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'KeyV' && !e.repeat) {
+        cycleCameraMode();
+        return;
+      }
+
       switch (e.code) {
         case 'KeyW':
         case 'ArrowUp':
@@ -120,23 +150,79 @@ export function PlayerController() {
       }
     };
 
+    // Scroll wheel zoom for Orbit camera mode
+    const handleWheel = (e: WheelEvent) => {
+      const zoomFactor = e.deltaY * 0.015;
+      orbitDistance.current = Math.max(2.5, Math.min(24.0, orbitDistance.current + zoomFactor));
+    };
+
+    // Mouse drag when pointer is not locked
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button === 0 || e.button === 2) {
+        isMouseDown.current = true;
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // In pointer lock mode (or mouse drag)
+      const isLocked = document.pointerLockElement !== null;
+      let dx = 0;
+      let dy = 0;
+
+      if (isLocked) {
+        dx = e.movementX;
+        dy = e.movementY;
+      } else if (isMouseDown.current) {
+        dx = e.clientX - lastMousePos.current.x;
+        dy = e.clientY - lastMousePos.current.y;
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+      }
+
+      if (dx !== 0 || dy !== 0) {
+        const sens = 0.0032;
+        camYaw.current -= dx * sens;
+        camPitch.current += dy * sens;
+
+        // Clamp camera pitch angles
+        const minPitch = cameraMode === 'orbit' ? -0.25 : -0.35;
+        const maxPitch = cameraMode === 'orbit' ? 1.25 : 1.10;
+        camPitch.current = Math.max(minPitch, Math.min(maxPitch, camPitch.current));
+      }
+    };
+
+    const handleMouseUp = () => {
+      isMouseDown.current = false;
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('wheel', handleWheel, { passive: true });
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, []);
+  }, [cycleCameraMode, cameraMode]);
 
-  // Temporary vectors for movement math
+  // Temporary vectors for movement & camera math (Reused to prevent per-frame allocations)
   const forward = useRef(new THREE.Vector3());
   const right = useRef(new THREE.Vector3());
   const moveDirection = useRef(new THREE.Vector3());
+  const idealCam = useRef(new THREE.Vector3());
+  const targetLook = useRef(new THREE.Vector3());
 
   useFrame((_, delta) => {
     if (gameState !== 'trekking') return;
 
-    // Cap delta to prevent huge jumps on tab switch / lag
+    // Cap delta to prevent huge jumps on lag spike
     const dt = Math.min(delta, 0.08);
 
     // 1. Mobile touch drag rotation
@@ -144,19 +230,11 @@ export function PlayerController() {
       const lookDelta = useTrekStore.getState().mobileLookDelta;
       if (lookDelta.x !== 0 || lookDelta.y !== 0) {
         const sensitivity = 0.0035;
-        mobileYaw.current -= lookDelta.x * sensitivity;
-        mobilePitch.current -= lookDelta.y * sensitivity;
+        camYaw.current -= lookDelta.x * sensitivity;
+        camPitch.current += lookDelta.y * sensitivity;
 
-        // Clamp pitch to avoid gimbal flip (-85° to +85°)
-        const maxPitch = (85 * Math.PI) / 180;
-        mobilePitch.current = Math.max(-maxPitch, Math.min(maxPitch, mobilePitch.current));
-
-        // Apply Euler rotation to camera: order YXZ
-        camera.rotation.set(0, 0, 0);
-        camera.rotation.y = mobileYaw.current;
-        camera.rotation.x = mobilePitch.current;
-
-        // Reset delta
+        const maxPitch = 1.2;
+        camPitch.current = Math.max(-0.35, Math.min(maxPitch, camPitch.current));
         useTrekStore.getState().setMobileLookDelta({ x: 0, y: 0 });
       }
     }
@@ -170,10 +248,10 @@ export function PlayerController() {
       const joystick = useTrekStore.getState().virtualJoystick;
       if (joystick.active) {
         moveX = joystick.x;
-        moveZ = -joystick.y; // In joystick: pulling down is positive Y, so push up (-Y) is forward
+        moveZ = -joystick.y; // Push up (-Y) is forward
         const magnitude = Math.sqrt(moveX * moveX + moveZ * moveZ);
         if (magnitude > 0.85) {
-          isSprinting = true; // Sprint on deep joystick tilt
+          isSprinting = true;
         }
       }
     } else {
@@ -185,31 +263,45 @@ export function PlayerController() {
     }
 
     const isMoving = Math.abs(moveX) > 0.05 || Math.abs(moveZ) > 0.05;
-    setIsMoving(isMoving);
-    setIsSprinting(isSprinting && isMoving);
 
-    // 3. Movement Direction relative to camera orientation
-    camera.getWorldDirection(forward.current);
-    forward.current.y = 0;
-    forward.current.normalize();
+    // 3. Movement Direction Relative to Camera Orientation (Requirement 2)
+    // Horizontal camera direction vector
+    forward.current.set(
+      Math.sin(camYaw.current),
+      0,
+      Math.cos(camYaw.current)
+    ).normalize();
 
+    // Right vector perpendicular to camera direction
     right.current.crossVectors(forward.current, camera.up).normalize();
 
     moveDirection.current.set(0, 0, 0);
     moveDirection.current.addScaledVector(forward.current, moveZ);
-    moveDirection.current.addScaledVector(right.current, moveX);
+    moveDirection.current.addScaledVector(right.current, -moveX);
 
     if (moveDirection.current.lengthSq() > 1) {
       moveDirection.current.normalize();
     }
 
-    // 4. Update Position
+    // 4. Update Position & Heading
     const speed = isSprinting ? SPRINT_SPEED : WALK_SPEED;
     if (isMoving) {
       const distance = speed * dt;
       playerPosition.current.x += moveDirection.current.x * distance;
       playerPosition.current.z += moveDirection.current.z * distance;
-      addDistanceWalked(distance);
+      distanceAccum.current += distance;
+
+      // In Third-Person, Wide, and Orbit modes: trekker turns smoothly toward movement direction
+      if (cameraMode !== 'first-person') {
+        const targetAngle = Math.atan2(moveDirection.current.x, moveDirection.current.z);
+        let diff = targetAngle - trekkerYaw.current;
+        // Wrap angle difference to [-PI, PI]
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        trekkerYaw.current += diff * Math.min(1.0, dt * 14.0);
+      } else {
+        trekkerYaw.current = camYaw.current;
+      }
 
       // Walking head bob
       const bobFreq = isSprinting ? 13 : 9;
@@ -218,6 +310,9 @@ export function PlayerController() {
       currentBob.current = THREE.MathUtils.lerp(currentBob.current, targetBob, 0.2);
     } else {
       currentBob.current = THREE.MathUtils.lerp(currentBob.current, 0, 0.1);
+      if (cameraMode === 'first-person') {
+        trekkerYaw.current = camYaw.current;
+      }
     }
 
     // 5. Keep inside terrain bounds
@@ -225,28 +320,121 @@ export function PlayerController() {
     playerPosition.current.x = clamped.x;
     playerPosition.current.z = clamped.z;
 
-    // 6. Terrain Height Adherence (snap smoothly to terrain + eye height + bob)
+    // 6. Terrain Ground Height
     const groundY = getTerrainHeight(playerPosition.current.x, playerPosition.current.z);
-    const targetCameraY = groundY + EYE_HEIGHT + currentBob.current;
-    playerPosition.current.y = THREE.MathUtils.lerp(playerPosition.current.y, targetCameraY, 0.25);
+    playerPosition.current.y = groundY;
 
-    // Update 3D camera
-    camera.position.x = playerPosition.current.x;
-    camera.position.y = playerPosition.current.y;
-    camera.position.z = playerPosition.current.z;
+    // 7. Multi-Mode Camera Computation & Smooth Damping (Requirement 1 & 2)
+    const px = playerPosition.current.x;
+    const pz = playerPosition.current.z;
 
-    // 7. Update Store telemetry
-    setPlayerPos([playerPosition.current.x, groundY, playerPosition.current.z]);
+    if (cameraMode === 'first-person') {
+      // First-person: eye height with walking bob
+      idealCam.current.set(px, groundY + EYE_HEIGHT + currentBob.current, pz);
+      targetLook.current.set(
+        px + Math.sin(camYaw.current) * Math.cos(camPitch.current) * 10,
+        groundY + EYE_HEIGHT - Math.sin(camPitch.current) * 10,
+        pz + Math.cos(camYaw.current) * Math.cos(camPitch.current) * 10
+      );
+    } else if (cameraMode === 'third-person') {
+      // Third-person follow: 4.2m behind, 2.0m above, looking slightly ahead
+      const dist = 4.2;
+      const height = 2.0;
+      targetLook.current.set(
+        px + Math.sin(camYaw.current) * 1.5,
+        groundY + 1.35,
+        pz + Math.cos(camYaw.current) * 1.5
+      );
+      idealCam.current.set(
+        px - Math.sin(camYaw.current) * Math.cos(camPitch.current) * dist,
+        groundY + height + Math.sin(camPitch.current) * dist,
+        pz - Math.cos(camYaw.current) * Math.cos(camPitch.current) * dist
+      );
+    } else if (cameraMode === 'wide') {
+      // Wide cinematic view: 16m back, 9m up, framing trekker against the valley
+      const dist = 16.0;
+      const height = 9.0;
+      targetLook.current.set(px, groundY + 1.2, pz);
+      idealCam.current.set(
+        px - Math.sin(camYaw.current) * Math.cos(camPitch.current) * dist,
+        groundY + height + Math.sin(camPitch.current) * dist,
+        pz - Math.cos(camYaw.current) * Math.cos(camPitch.current) * dist
+      );
+    } else {
+      // Orbit view: 360° rotation around trekker with scroll/pinch zoom
+      const dist = orbitDistance.current;
+      targetLook.current.set(px, groundY + 1.25, pz);
+      idealCam.current.set(
+        px - Math.sin(camYaw.current) * Math.cos(camPitch.current) * dist,
+        groundY + 1.25 + Math.sin(camPitch.current) * dist,
+        pz - Math.cos(camYaw.current) * Math.cos(camPitch.current) * dist
+      );
+    }
+
+    // Smooth camera damping between modes (~0.6s smooth transition)
+    const blendRate = 1.0 - Math.exp(-dt / (cameraMode === 'wide' ? 0.35 : 0.18));
+    currentCamPos.current.lerp(idealCam.current, blendRate);
+    currentLookTarget.current.lerp(targetLook.current, blendRate);
+
+    // Camera Terrain Clearance: Never go below terrain or inside hills
+    const terrainAtCam = getTerrainHeight(currentCamPos.current.x, currentCamPos.current.z);
+    const minClearance = 1.15;
+    if (currentCamPos.current.y < terrainAtCam + minClearance) {
+      currentCamPos.current.y = terrainAtCam + minClearance;
+    }
+
+    // Anti-Hill Occlusion: Sample along the ray from target to camera to prevent hill clipping
+    if (cameraMode !== 'first-person') {
+      for (const step of [0.3, 0.6, 0.85]) {
+        const sampleX = THREE.MathUtils.lerp(currentLookTarget.current.x, currentCamPos.current.x, step);
+        const sampleZ = THREE.MathUtils.lerp(currentLookTarget.current.z, currentCamPos.current.z, step);
+        const sampleExpectedY = THREE.MathUtils.lerp(currentLookTarget.current.y, currentCamPos.current.y, step);
+        const groundUnderRay = getTerrainHeight(sampleX, sampleZ);
+
+        if (groundUnderRay + 0.85 > sampleExpectedY) {
+          const pushUp = groundUnderRay + 0.85 - sampleExpectedY;
+          currentCamPos.current.y += pushUp;
+        }
+      }
+    }
+
+    // Apply to Three.js camera
+    camera.position.copy(currentCamPos.current);
+    camera.lookAt(currentLookTarget.current);
 
     // Compass heading (degrees: 0 = North, 90 = East, 180 = South, 270 = West)
-    const headingRad = Math.atan2(forward.current.x, -forward.current.z);
-    const headingDeg = Math.round(((headingRad * 180) / Math.PI + 360) % 360);
-    setPlayerHeading(headingDeg);
+    const headingDeg = Math.round(((camYaw.current * 180) / Math.PI + 360) % 360);
+
+    // 8. Fast mutable telemetry ref (Zero React overhead on 60 FPS frames)
+    playerTelemetry.pos[0] = px;
+    playerTelemetry.pos[1] = groundY;
+    playerTelemetry.pos[2] = pz;
+    playerTelemetry.groundY = groundY;
+    playerTelemetry.elevation = getRealElevationMeters(px, pz);
+    playerTelemetry.distanceWalked = Math.round(distanceAccum.current);
+    playerTelemetry.heading = headingDeg;
+    playerTelemetry.trekkerYaw = trekkerYaw.current;
+    playerTelemetry.isMoving = isMoving;
+    playerTelemetry.isSprinting = isSprinting && isMoving;
+
+    // 9. Throttled Store Update: sync to React store at ~5 Hz (every 200ms)
+    hudTimer.current += dt;
+    if (hudTimer.current >= 0.2) {
+      hudTimer.current = 0;
+      useTrekStore.setState({
+        playerPos: [px, groundY, pz],
+        elevation: playerTelemetry.elevation,
+        distanceWalked: playerTelemetry.distanceWalked,
+        playerHeading: headingDeg,
+        isMoving,
+        isSprinting: isSprinting && isMoving,
+      });
+    }
   });
 
   return (
     <>
-      {!isMobile && gameState === 'trekking' && (
+      {!isMobile && gameState === 'trekking' && cameraMode === 'first-person' && (
         <PointerLockControls
           ref={controlsRef}
           onLock={() => setIsPointerLocked(true)}

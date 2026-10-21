@@ -3,6 +3,29 @@ import { START_POSITION, getRealElevationMeters } from '@/lib/terrain';
 
 export type GameState = 'landing' | 'trekking' | 'paused';
 export type QualityLevel = 'low' | 'medium' | 'high';
+export type CameraMode = 'first-person' | 'third-person' | 'wide' | 'orbit';
+
+export interface PlayerTelemetry {
+  pos: [number, number, number];
+  groundY: number;
+  elevation: number;
+  distanceWalked: number;
+  heading: number;
+  trekkerYaw: number;
+  isMoving: boolean;
+  isSprinting: boolean;
+}
+
+export const playerTelemetry: PlayerTelemetry = {
+  pos: [...START_POSITION],
+  groundY: START_POSITION[1] - 1.7,
+  elevation: 1035,
+  distanceWalked: 0,
+  heading: 0,
+  trekkerYaw: 0,
+  isMoving: false,
+  isSprinting: false,
+};
 
 interface VirtualJoystickState {
   x: number;
@@ -31,6 +54,11 @@ interface TrekStore {
   isPointerLocked: boolean;
   setIsPointerLocked: (locked: boolean) => void;
 
+  // Camera Mode
+  cameraMode: CameraMode;
+  setCameraMode: (mode: CameraMode) => void;
+  cycleCameraMode: () => void;
+
   // Player telemetry
   playerPos: [number, number, number];
   setPlayerPos: (pos: [number, number, number]) => void;
@@ -57,6 +85,18 @@ interface TrekStore {
   setMobileLookDelta: (val: MobileLookDelta) => void;
   isMobile: boolean;
   setIsMobile: (val: boolean) => void;
+
+  // Development Subsystem Toggles (for profiling & isolating costs)
+  devToggles: {
+    terrain: boolean;
+    trees: boolean;
+    grass: boolean;
+    rocks: boolean;
+    shadows: boolean;
+    postprocessing: boolean;
+    mountains: boolean;
+  };
+  setDevToggle: (key: 'terrain' | 'trees' | 'grass' | 'rocks' | 'shadows' | 'postprocessing' | 'mountains', val: boolean) => void;
 }
 
 export const useTrekStore = create<TrekStore>((set) => ({
@@ -82,12 +122,42 @@ export const useTrekStore = create<TrekStore>((set) => ({
     })),
   setGameState: (gameState) => set({ gameState }),
 
-  // Default quality: auto-detect on client mount
-  quality: 'high',
+  // Default quality: Start at Medium by default (Requirement 2f)
+  quality: 'medium',
   setQuality: (quality) => set({ quality }),
 
   isPointerLocked: false,
   setIsPointerLocked: (isPointerLocked) => set({ isPointerLocked }),
+
+  // Camera Mode with localStorage persistence (Requirement 1)
+  cameraMode:
+    typeof window !== 'undefined' &&
+    ['first-person', 'third-person', 'wide', 'orbit'].includes(localStorage.getItem('trek_camera_mode') || '')
+      ? (localStorage.getItem('trek_camera_mode') as CameraMode)
+      : 'first-person',
+
+  setCameraMode: (mode) => {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('trek_camera_mode', mode);
+      } catch {}
+    }
+    set({ cameraMode: mode });
+  },
+
+  cycleCameraMode: () => {
+    const modes: CameraMode[] = ['first-person', 'third-person', 'wide', 'orbit'];
+    set((state) => {
+      const idx = modes.indexOf(state.cameraMode);
+      const nextMode = modes[(idx + 1) % modes.length];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('trek_camera_mode', nextMode);
+        } catch {}
+      }
+      return { cameraMode: nextMode };
+    });
+  },
 
   playerPos: [...START_POSITION],
   setPlayerPos: (playerPos) =>
@@ -124,4 +194,16 @@ export const useTrekStore = create<TrekStore>((set) => ({
   setMobileLookDelta: (mobileLookDelta) => set({ mobileLookDelta }),
   isMobile: false,
   setIsMobile: (isMobile) => set({ isMobile }),
+
+  devToggles: {
+    terrain: true,
+    trees: true,
+    grass: true,
+    rocks: true,
+    shadows: true,
+    postprocessing: true,
+    mountains: true,
+  },
+  setDevToggle: (key, val) =>
+    set((state) => ({ devToggles: { ...state.devToggles, [key]: val } })),
 }));

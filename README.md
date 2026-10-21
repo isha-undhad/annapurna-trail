@@ -93,8 +93,10 @@ Open [http://localhost:3000](http://localhost:3000) in your browser. Click **Sta
 | Action | Key / Input |
 |---|---|
 | **Move** | `W`, `A`, `S`, `D` or `Arrow Keys` |
+| **Switch Camera** | `V` (Cycles: 1st Person, 3rd Person Follow, Wide Cinematic, 360° Orbit) |
+| **Zoom Camera** | Mouse Scroll Wheel (in Orbit mode, 2.5m to 24m) |
 | **Sprint** | Hold `Shift` while moving |
-| **Look Around** | Click anywhere to lock mouse cursor and look around |
+| **Look Around / Orbit** | Click to lock cursor or drag mouse to rotate view |
 | **Release Cursor** | Press `Esc` |
 | **Pause / Menu** | Click the pause icon in the top right |
 
@@ -102,8 +104,9 @@ Open [http://localhost:3000](http://localhost:3000) in your browser. Click **Sta
 | Action | Gesture |
 |---|---|
 | **Move** | Touch & drag on the **left side** of the screen (Virtual Joystick) |
+| **Switch Camera** | Tap the floating **Cam** button (bottom right) |
+| **Look Around / Orbit** | Swipe / drag anywhere on the **right side** of the screen |
 | **Sprint** | Push the virtual joystick knob toward the outer rim |
-| **Look Around** | Swipe / drag anywhere on the **right side** of the screen |
 | **Pause** | Tap the pause button in the top right |
 
 ---

@@ -1,15 +1,15 @@
 'use client';
 
-import React, { useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
 import { getTerrainHeight, getDistanceToPath, getTerrainSlope } from '@/lib/terrain';
-import { useTrekStore } from '@/store/useTrekStore';
 import { WORLD_SCALE } from '@/lib/constants';
+import { useTrekStore } from '@/store/useTrekStore';
 import { getTexturePath, configureTexture } from '@/lib/textures';
 
-function createSeededRandom(seed = 3344) {
+function createSeededRandom(seed = 44556) {
   let s = seed;
   return () => {
     s = (s * 16807) % 2147483647;
@@ -29,7 +29,7 @@ export function InstancedGrass() {
     configureTexture(grassColor, true, aniso);
   }, [grassColor, quality]);
 
-  // Small, delicate tapered grass tuft geometry (0.35m - 0.55m height, rooted in ground)
+  // Small, delicate tapered grass tuft geometry (0.35m - 0.50m height)
   const grassGeometry = useMemo(() => {
     const bladeCount = 3;
     const totalVerts = bladeCount * 4;
@@ -43,7 +43,6 @@ export function InstancedGrass() {
     const baseColor = new THREE.Color('#386b2d');
     const tipColor = new THREE.Color('#5ea848');
 
-    // Human-scale dimensions: 0.42m high, 0.06m wide base
     const widthBase = 0.06;
     const widthTip = 0.015;
     const height = 0.42;
@@ -98,7 +97,7 @@ export function InstancedGrass() {
 
       indices.push(
         vertOffset, vertOffset + 1, vertOffset + 2,
-        vertOffset + 2, vertOffset + 1, vertOffset + 3
+        vertOffset, vertOffset + 2, vertOffset + 3
       );
     }
 
@@ -108,11 +107,10 @@ export function InstancedGrass() {
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.setIndex(indices);
-    geo.computeVertexNormals();
     return geo;
   }, []);
 
-  // Material with subtle wind sway shader
+  // Material with wind sway strictly for nearby tufts
   const grassMaterial = useMemo(() => {
     const mat = new THREE.MeshStandardMaterial({
       map: grassColor,
@@ -133,11 +131,16 @@ export function InstancedGrass() {
         '#include <begin_vertex>',
         `
         #include <begin_vertex>
-        // Displace blade tips proportional to height
-        float bladeTip = position.y / 0.45;
-        float wave = sin(uTime * 3.0 + position.x * 2.5 + position.z * 2.0) * 0.08 * bladeTip;
-        transformed.x += wave;
-        transformed.z += wave * 0.5;
+        // Displace blade tips proportional to height, strictly within 35m
+        vec3 wPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        float dCam = length(wPos - cameraPosition);
+        if (dCam < 35.0) {
+          float proximity = 1.0 - dCam / 35.0;
+          float bladeTip = position.y / 0.45;
+          float wave = sin(uTime * 3.0 + position.x * 2.5 + position.z * 2.0) * 0.08 * bladeTip * proximity;
+          transformed.x += wave;
+          transformed.z += wave * 0.5;
+        }
         `
       );
     };
@@ -145,8 +148,23 @@ export function InstancedGrass() {
     return mat;
   }, [grassColor]);
 
-  // Dynamic instance matrices centered around player
-  const { count, matrices } = useMemo(() => {
+  // Distance culling & thresholded instance generation (Requirement 2g)
+  const lastCenterRef = useRef({ x: 99999, z: 99999 });
+  const [instances, setInstances] = useState<{ count: number; matrices: THREE.Matrix4[] }>({
+    count: 0,
+    matrices: [],
+  });
+
+  const px = playerPos[0];
+  const pz = playerPos[2];
+
+  useEffect(() => {
+    const distFromLast = Math.hypot(px - lastCenterRef.current.x, pz - lastCenterRef.current.z);
+    if (distFromLast < 22 && instances.count > 0) {
+      return;
+    }
+    lastCenterRef.current = { x: px, z: pz };
+
     const random = createSeededRandom(7788);
     const tempMatrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
@@ -155,33 +173,30 @@ export function InstancedGrass() {
     const quaternion = new THREE.Quaternion();
 
     const transforms: THREE.Matrix4[] = [];
-    const maxCandidates = quality === 'high' ? 650 : quality === 'medium' ? 380 : 180;
-    const px = playerPos[0];
-    const pz = playerPos[2];
+    // Capped grass tuft counts: High: 500, Medium: 250, Low: 0 (disabled on Low)
+    const maxCandidates = quality === 'high' ? 500 : quality === 'medium' ? 250 : 0;
+    const maxRadius = quality === 'high' ? 60 : 40;
 
     for (let i = 0; i < maxCandidates; i++) {
-      const radius = 2.0 + random() * 75; // Within 75m of player
+      const radius = 2.0 + random() * maxRadius;
       const angle = random() * Math.PI * 2;
       const x = px + Math.cos(angle) * radius;
       const z = pz + Math.sin(angle) * radius;
 
       const distToPath = getDistanceToPath(x, z);
-      if (distToPath < 1.6) continue; // Keep trail clear
+      if (distToPath < 1.6) continue;
 
       const y = getTerrainHeight(x, z);
       const realAlt = y / WORLD_SCALE;
 
-      // Real elevation zoning:
-      // Below 2,000m: dense
-      // 2,000 to 3,600m: meadow tufts
-      // Above 3,800m: no grass (moraine/snow)
+      // Below 3,750m
       if (realAlt > 3750) continue;
       if (realAlt > 3200 && random() > 0.4) continue;
 
       const slope = getTerrainSlope(x, z);
-      if (slope > 0.32) continue; // No grass on rocky cliffs
+      if (slope > 0.32) continue;
 
-      // Root tuft into the soil so it is never floating
+      // Root tuft into the soil
       position.set(x, y - 0.04, z);
       rotation.set(0, random() * Math.PI * 2, 0);
       quaternion.setFromEuler(rotation);
@@ -193,16 +208,17 @@ export function InstancedGrass() {
       transforms.push(tempMatrix.clone());
     }
 
-    return { count: transforms.length, matrices: transforms };
-  }, [quality, playerPos]);
+    setInstances({ count: transforms.length, matrices: transforms });
+  }, [px, pz, quality]);
 
   useLayoutEffect(() => {
     if (!meshRef.current) return;
-    matrices.forEach((mat, idx) => {
+    instances.matrices.forEach((mat, idx) => {
       meshRef.current.setMatrixAt(idx, mat);
     });
+    meshRef.current.count = instances.count;
     meshRef.current.instanceMatrix.needsUpdate = true;
-  }, [matrices]);
+  }, [instances]);
 
   const timerRef = useRef<THREE.Timer | null>(null);
   if (!timerRef.current) {
@@ -216,13 +232,14 @@ export function InstancedGrass() {
     }
   });
 
-  if (quality === 'low') return null;
+  if (quality === 'low' || instances.count === 0) return null;
 
   return (
     <instancedMesh
       ref={meshRef}
-      args={[grassGeometry, grassMaterial, count]}
+      args={[grassGeometry, grassMaterial, 600]}
       receiveShadow
+      castShadow={false}
     />
   );
 }

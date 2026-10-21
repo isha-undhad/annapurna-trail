@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect, useState, useMemo } from 'react';
-import { useTrekStore, QualityLevel } from '@/store/useTrekStore';
-import { WAYPOINTS, getTerrainHeight } from '@/lib/terrain';
+import { useTrekStore, QualityLevel, CameraMode } from '@/store/useTrekStore';
+import { WAYPOINTS, getTerrainHeight, getNextRouteWaypoint } from '@/lib/terrain';
 import { WORLD_SCALE } from '@/lib/constants';
 
 function getCompassCardinal(deg: number): string {
@@ -27,48 +27,34 @@ export function TrekHUD() {
 
   const [showWaypointMenu, setShowWaypointMenu] = useState(false);
 
-  // Auto-choose quality on first load based on hardware capability
+  // Quick FPS calibration at load (Requirement 2f)
   useEffect(() => {
-    const isMobileDevice =
-      'ontouchstart' in window ||
-      navigator.maxTouchPoints > 1 ||
-      window.innerWidth < 800;
+    // Start at Medium by default
+    const timer = setTimeout(() => {
+      if (typeof window !== 'undefined' && window.__TREK_METRICS__) {
+        const measuredFps = window.__TREK_METRICS__.fps;
+        if (measuredFps >= 54) {
+          setQuality('high');
+        } else if (measuredFps < 32) {
+          setQuality('low');
+        }
+      }
+    }, 2800);
 
-    const cores = navigator.hardwareConcurrency || 4;
-    if (isMobileDevice) {
-      setQuality(cores > 6 ? 'medium' : 'low');
-    } else {
-      setQuality(cores >= 8 ? 'high' : 'medium');
-    }
+    return () => clearTimeout(timer);
   }, [setQuality]);
 
-  // Determine "Next Stop" waypoint and distance
+  const cameraMode = useTrekStore((s) => s.cameraMode);
+  const cycleCameraMode = useTrekStore((s) => s.cycleCameraMode);
+
+  // Determine "Next Stop" waypoint and distance along route (Requirement 0)
   const nextStop = useMemo(() => {
-    const px = playerPos[0];
-    const pz = playerPos[2];
-
-    let closestUpcoming: (typeof WAYPOINTS)[0] | null = null;
-    let minDistance = Infinity;
-
-    // Find the next waypoint ahead along the trail
-    for (let i = 0; i < WAYPOINTS.length; i++) {
-      const wp = WAYPOINTS[i];
-      const dx = wp.gameX - px;
-      const dz = wp.gameZ - pz;
-      const distUnits = Math.sqrt(dx * dx + dz * dz);
-      const realMeters = Math.round(distUnits / WORLD_SCALE);
-
-      if (realMeters > 30 && realMeters < minDistance) {
-        minDistance = realMeters;
-        closestUpcoming = wp;
-      }
-    }
-
-    if (!closestUpcoming) {
-      return { name: 'Annapurna Base Camp (ABC)', distance: 0 };
-    }
-
-    return { name: closestUpcoming.name, distance: minDistance };
+    const { nextWaypoint, distanceAlongRouteMeters } = getNextRouteWaypoint(playerPos[0], playerPos[2]);
+    return {
+      name: nextWaypoint.name,
+      distance: distanceAlongRouteMeters,
+      elevation: nextWaypoint.elevation,
+    };
   }, [playerPos]);
 
   if (gameState !== 'trekking') return null;
@@ -139,8 +125,24 @@ export function TrekHUD() {
           </span>
         </div>
 
-        {/* Right: Dev Waypoint Jump Menu, Quality Toggle & Pause */}
+        {/* Right: Camera Mode, Dev Waypoint Jump Menu, Quality Toggle & Pause */}
         <div className="pointer-events-auto flex items-center gap-2">
+          {/* Camera Mode Switcher Button (Requirement 1 & 4) */}
+          <button
+            onClick={cycleCameraMode}
+            type="button"
+            className="flex items-center gap-1.5 rounded-2xl border border-sky-400/30 bg-slate-950/70 px-3 py-2 text-xs font-bold text-sky-200 backdrop-blur-md hover:bg-slate-900 transition-all shadow-md group"
+            title="Switch Camera View Mode (Press V to cycle)"
+          >
+            <span className="text-sm">
+              {cameraMode === 'first-person' ? '👁️' : cameraMode === 'third-person' ? '🚶' : cameraMode === 'wide' ? '🌄' : '🔄'}
+            </span>
+            <span className="hidden sm:inline capitalize">
+              {cameraMode === 'first-person' ? '1st Person' : cameraMode === 'third-person' ? '3rd Person' : cameraMode === 'wide' ? 'Wide' : 'Orbit'}
+            </span>
+            <kbd className="hidden md:inline rounded bg-white/10 px-1 py-0.5 text-[9px] text-sky-300 font-mono">V</kbd>
+          </button>
+
           {/* Dev Waypoint Jump Menu Button */}
           <div className="relative">
             <button
@@ -221,8 +223,23 @@ export function TrekHUD() {
         </div>
       </header>
 
-      {/* Desktop Crosshair & Click-to-look Prompt */}
-      {!isMobile && (
+      {/* Mobile Floating Camera Mode Switch Button (Requirement 1 & 4) */}
+      {isMobile && (
+        <button
+          onClick={cycleCameraMode}
+          type="button"
+          className="pointer-events-auto fixed bottom-24 right-4 z-30 flex h-12 w-12 flex-col items-center justify-center rounded-2xl border border-sky-400/40 bg-slate-950/85 text-sky-300 backdrop-blur-md shadow-2xl active:scale-90 transition-transform"
+          title="Cycle Camera Mode (1st Person, 3rd Person, Wide, Orbit)"
+        >
+          <span className="text-base">
+            {cameraMode === 'first-person' ? '👁️' : cameraMode === 'third-person' ? '🚶' : cameraMode === 'wide' ? '🌄' : '🔄'}
+          </span>
+          <span className="text-[8px] font-bold uppercase tracking-tight">Cam</span>
+        </button>
+      )}
+
+      {/* Desktop Crosshair & Click-to-look Prompt (Only in first-person mode) */}
+      {!isMobile && cameraMode === 'first-person' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
           <div className="relative flex items-center justify-center">
             <div className="h-1.5 w-1.5 rounded-full bg-white/70 shadow-sm" />

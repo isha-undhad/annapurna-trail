@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { getTerrainHeight, getDistanceToPath, getTerrainSlope } from '@/lib/terrain';
@@ -17,6 +17,7 @@ function createSeededRandom(seed = 11223) {
 export function InstancedRocks() {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const quality = useTrekStore((s) => s.quality);
+  const playerPos = useTrekStore((s) => s.playerPos);
 
   // Load the CC0 Poly Haven photogrammetric rock model
   const { scene } = useGLTF('/models/rock_07/rock_07_1k.gltf');
@@ -34,16 +35,18 @@ export function InstancedRocks() {
       }
     });
 
-    const rockGeo: THREE.BufferGeometry = geo ? geo : new THREE.DodecahedronGeometry(1.0, 1);
-    rockGeo.computeVertexNormals();
-    rockGeo.center();
-    if (geo) {
-      // Poly Haven rock_07 raw scale is ~0.15m units; normalize so base scale is ~1 meter
-      rockGeo.scale(7.2, 7.2, 7.2);
+    // Optimized natural Himalayan granite boulder geometry (240 triangles instead of 14,844)
+    const rockGeo = new THREE.DodecahedronGeometry(1.3, 2);
+    const pos = rockGeo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i);
+      const vy = pos.getY(i);
+      const vz = pos.getZ(i);
+      const displacement = (Math.sin(vx * 3.2 + vy * 2.1) + Math.cos(vz * 2.8 + vx * 1.5)) * 0.12;
+      pos.setXYZ(i, vx * (1 + displacement), vy * (0.8 + displacement), vz * (1 + displacement));
     }
+    rockGeo.computeVertexNormals();
 
-    // Clean PBR material for natural granite/slate rocks
-    // Do NOT use ARM texture as metalnessMap (ARM has AO in Red, Roughness in Green)
     let rockDiffMap: THREE.Texture | null = null;
     let rockNorMap: THREE.Texture | null = null;
 
@@ -67,8 +70,8 @@ export function InstancedRocks() {
       normalMap: rockNorMap,
       color: new THREE.Color('#8e928d'), // Natural Himalayan granite / slate tone
       roughness: 0.88,
-      metalness: 0.0, // Strictly non-metallic
-      envMapIntensity: 0.2, // Low environment reflection
+      metalness: 0.0,
+      envMapIntensity: 0.2,
     });
 
     return {
@@ -77,10 +80,23 @@ export function InstancedRocks() {
     };
   }, [scene, quality]);
 
-  const playerPos = useTrekStore((s) => s.playerPos);
+  // Thresholded instance generation (Requirement 2a: No per-frame recalculations)
+  const lastCenterRef = useRef({ x: 99999, z: 99999 });
+  const [instances, setInstances] = useState<{ count: number; matrices: THREE.Matrix4[] }>({
+    count: 0,
+    matrices: [],
+  });
 
-  // Compute instance matrices with slope filtering and soil embedding
-  const { count, matrices } = useMemo(() => {
+  const px = playerPos[0];
+  const pz = playerPos[2];
+
+  useEffect(() => {
+    const distFromLast = Math.hypot(px - lastCenterRef.current.x, pz - lastCenterRef.current.z);
+    if (distFromLast < 35 && instances.count > 0) {
+      return;
+    }
+    lastCenterRef.current = { x: px, z: pz };
+
     const random = createSeededRandom(9911);
     const tempMatrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
@@ -89,36 +105,29 @@ export function InstancedRocks() {
     const quaternion = new THREE.Quaternion();
 
     const transforms: THREE.Matrix4[] = [];
-    const maxCandidates = quality === 'high' ? 320 : quality === 'medium' ? 200 : 110;
-    const px = playerPos[0];
-    const pz = playerPos[2];
+    // Capped rock counts: High: 65, Medium: 35, Low: 15
+    const maxCandidates = quality === 'high' ? 65 : quality === 'medium' ? 35 : 15;
+    const maxRadius = quality === 'high' ? 110 : 75;
 
     for (let i = 0; i < maxCandidates; i++) {
-      const radius = 3.0 + random() * 160;
+      const radius = 3.0 + random() * maxRadius;
       const angle = random() * Math.PI * 2;
       const x = px + Math.cos(angle) * radius;
       const z = pz + Math.sin(angle) * radius;
 
       const distToPath = getDistanceToPath(x, z);
-      // Keep center of walkable trail clear
-      if (distToPath < 2.5) continue;
+      if (distToPath < 2.5) continue; // Keep center of walkable trail clear
 
-      // Filter out steep cliff slopes to prevent hovering boulders
       const slope = getTerrainSlope(x, z);
-      if (slope > 0.38) continue;
+      if (slope > 0.38) continue; // Filter out steep cliff slopes
 
-      // Favor rocks bordering the dirt trail (2.5 to 8.5) and across meadows/moraine
       const isTrailBorder = distToPath >= 2.5 && distToPath <= 8.5;
       if (!isTrailBorder && random() > 0.45) continue;
 
       const y = getTerrainHeight(x, z);
-      // Human scale: boulders 0.5 to 2.8m
       const scaleBase = isTrailBorder ? 0.45 + random() * 0.55 : 0.65 + random() * 0.95;
 
-      // Sink boulder firmly into terrain so base is embedded with no hovering gap
       position.set(x, y - scaleBase * 0.18, z);
-
-      // Random natural orientation
       rotation.set(
         (random() - 0.5) * 0.35,
         random() * Math.PI * 2,
@@ -136,25 +145,26 @@ export function InstancedRocks() {
       transforms.push(tempMatrix.clone());
     }
 
-    return { count: transforms.length, matrices: transforms };
-  }, [quality, playerPos]);
+    setInstances({ count: transforms.length, matrices: transforms });
+  }, [px, pz, quality]);
 
   useLayoutEffect(() => {
     if (!meshRef.current) return;
-    matrices.forEach((mat, idx) => {
+    instances.matrices.forEach((mat, idx) => {
       meshRef.current.setMatrixAt(idx, mat);
     });
+    meshRef.current.count = instances.count;
     meshRef.current.instanceMatrix.needsUpdate = true;
-  }, [matrices]);
+  }, [instances]);
+
+  if (instances.count === 0) return null;
 
   return (
     <instancedMesh
       ref={meshRef}
-      args={[rockGeometry, rockMaterial, count]}
-      castShadow={quality !== 'low'}
+      args={[rockGeometry, rockMaterial, 80]}
       receiveShadow
+      castShadow={quality === 'high'}
     />
   );
 }
-
-useGLTF.preload('/models/rock_07/rock_07_1k.gltf');

@@ -22,6 +22,7 @@ export interface Waypoint {
   gameX: number;     // Game units (x * WORLD_SCALE)
   gameZ: number;     // Game units (z * WORLD_SCALE)
   gameY: number;     // Game units (elevation * WORLD_SCALE)
+  routeDistanceMeters: number; // Cumulative meters along trail route from Nayapul
 }
 
 export interface TrailPoint {
@@ -33,14 +34,6 @@ export interface TrailPoint {
   gameY: number;     // Game units
 }
 
-// Transform waypoints to game units
-export const WAYPOINTS: Waypoint[] = terrainMeta.waypoints.map((wp) => ({
-  ...wp,
-  gameX: Math.round(wp.x * WORLD_SCALE * 10) / 10,
-  gameZ: Math.round(wp.z * WORLD_SCALE * 10) / 10,
-  gameY: Math.round(wp.elevation * WORLD_SCALE * 10) / 10,
-}));
-
 // Transform trail polyline to game units
 export const TRAIL_POLYLINE: TrailPoint[] = terrainMeta.trail.map((p) => ({
   ...p,
@@ -48,6 +41,94 @@ export const TRAIL_POLYLINE: TrailPoint[] = terrainMeta.trail.map((p) => ({
   gameZ: Math.round(p.z * WORLD_SCALE * 10) / 10,
   gameY: Math.round(p.elevation * WORLD_SCALE * 10) / 10,
 }));
+
+// Precalculate cumulative distances along trail polyline in real meters
+export const TRAIL_CUMULATIVE_METERS: number[] = new Array(TRAIL_POLYLINE.length);
+TRAIL_CUMULATIVE_METERS[0] = 0;
+for (let i = 1; i < TRAIL_POLYLINE.length; i++) {
+  const dx = TRAIL_POLYLINE[i].x - TRAIL_POLYLINE[i - 1].x;
+  const dz = TRAIL_POLYLINE[i].z - TRAIL_POLYLINE[i - 1].z;
+  const segDist = Math.hypot(dx, dz);
+  TRAIL_CUMULATIVE_METERS[i] = TRAIL_CUMULATIVE_METERS[i - 1] + segDist;
+}
+
+/**
+ * Calculates current progress along the trail route in real meters from Nayapul
+ */
+export function getTrailProgressMeters(gameX: number, gameZ: number): number {
+  let minDistSq = Infinity;
+  let bestProgress = 0;
+
+  for (let i = 0; i < TRAIL_POLYLINE.length - 1; i++) {
+    const p1 = TRAIL_POLYLINE[i];
+    const p2 = TRAIL_POLYLINE[i + 1];
+
+    const vx = p2.gameX - p1.gameX;
+    const vz = p2.gameZ - p1.gameZ;
+    const wx = gameX - p1.gameX;
+    const wz = gameZ - p1.gameZ;
+
+    const c1 = wx * vx + wz * vz;
+    let t = 0;
+    if (c1 > 0) {
+      const c2 = vx * vx + vz * vz;
+      t = c2 > 0 ? Math.min(1.0, c1 / c2) : 0;
+    }
+
+    const projX = p1.gameX + t * vx;
+    const projZ = p1.gameZ + t * vz;
+    const dx = gameX - projX;
+    const dz = gameZ - projZ;
+    const dSq = dx * dx + dz * dz;
+
+    if (dSq < minDistSq) {
+      minDistSq = dSq;
+      const segStartM = TRAIL_CUMULATIVE_METERS[i];
+      const segEndM = TRAIL_CUMULATIVE_METERS[i + 1];
+      bestProgress = segStartM + t * (segEndM - segStartM);
+    }
+  }
+
+  return bestProgress;
+}
+
+// Transform waypoints to game units with route distance
+export const WAYPOINTS: Waypoint[] = terrainMeta.waypoints.map((wp) => {
+  const gameX = Math.round(wp.x * WORLD_SCALE * 10) / 10;
+  const gameZ = Math.round(wp.z * WORLD_SCALE * 10) / 10;
+  const gameY = Math.round(wp.elevation * WORLD_SCALE * 10) / 10;
+  const routeDistanceMeters = Math.round(getTrailProgressMeters(gameX, gameZ));
+  return {
+    ...wp,
+    gameX,
+    gameZ,
+    gameY,
+    routeDistanceMeters,
+  };
+});
+
+/**
+ * Finds the next upcoming waypoint in chronological route order along the trail,
+ * and the remaining distance along the trail route to reach it.
+ */
+export function getNextRouteWaypoint(gameX: number, gameZ: number): { nextWaypoint: Waypoint; distanceAlongRouteMeters: number } {
+  const playerProgress = getTrailProgressMeters(gameX, gameZ);
+
+  // Traverse waypoints strictly in route order (0: Nayapul -> 16: ABC)
+  for (let i = 0; i < WAYPOINTS.length; i++) {
+    const wp = WAYPOINTS[i];
+    // If waypoint is ahead of player by more than 25m along route
+    if (wp.routeDistanceMeters > playerProgress + 25) {
+      const dist = Math.max(0, Math.round(wp.routeDistanceMeters - playerProgress));
+      return { nextWaypoint: wp, distanceAlongRouteMeters: dist };
+    }
+  }
+
+  // End of trek: Annapurna Base Camp
+  const lastWp = WAYPOINTS[WAYPOINTS.length - 1];
+  const dist = Math.max(0, Math.round(lastWp.routeDistanceMeters - playerProgress));
+  return { nextWaypoint: lastWp, distanceAlongRouteMeters: dist };
+}
 
 // Playable world bounds in game units (covering the whole ABC sanctuary route)
 export const WORLD_BOUNDS = {
