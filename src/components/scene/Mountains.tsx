@@ -3,6 +3,8 @@
 import React, { useLayoutEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
+import { useTrekStore } from '@/store/useTrekStore';
+import { getTexturePath, configureTexture } from '@/lib/textures';
 
 interface PeakData {
   x: number;
@@ -15,25 +17,27 @@ interface PeakData {
 }
 
 export function Mountains() {
+  const quality = useTrekStore((s) => s.quality);
+
   const textures = useTexture({
-    rockColor: '/textures/rock/color.jpg',
-    rockNormal: '/textures/rock/normal.jpg',
-    rockRough: '/textures/rock/roughness.jpg',
-    snowColor: '/textures/snow/color.jpg',
-    snowNormal: '/textures/snow/normal.jpg',
-    snowRough: '/textures/snow/roughness.jpg',
+    rockColor: getTexturePath('rock', 'color.jpg', quality),
+    rockNormal: getTexturePath('rock', 'normal.jpg', quality),
+    rockRough: getTexturePath('rock', 'roughness.jpg', quality),
+    snowColor: getTexturePath('snow', 'color.jpg', quality),
+    snowNormal: getTexturePath('snow', 'normal.jpg', quality),
+    snowRough: getTexturePath('snow', 'roughness.jpg', quality),
   });
 
   useLayoutEffect(() => {
-    Object.values(textures).forEach((tex) => {
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.RepeatWrapping;
-      tex.generateMipmaps = true;
-      tex.anisotropy = 8;
-    });
-    textures.rockColor.colorSpace = THREE.SRGBColorSpace;
-    textures.snowColor.colorSpace = THREE.SRGBColorSpace;
-  }, [textures]);
+    const aniso = quality === 'high' ? 8 : quality === 'medium' ? 4 : 2;
+
+    configureTexture(textures.rockColor, true, aniso);
+    configureTexture(textures.rockNormal, false, aniso);
+    configureTexture(textures.rockRough, false, aniso);
+    configureTexture(textures.snowColor, true, aniso);
+    configureTexture(textures.snowNormal, false, aniso);
+    configureTexture(textures.snowRough, false, aniso);
+  }, [textures, quality]);
 
   const mountainGeometry = useMemo(() => {
     const peaks: PeakData[] = [
@@ -194,6 +198,7 @@ export function Mountains() {
         ${shader.fragmentShader}
       `;
 
+      // Custom color map blending with triplanar mountain textures & atmospheric haze
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <map_fragment>',
         `
@@ -208,18 +213,36 @@ export function Mountains() {
         float summitSnow = smoothstep(140.0, 260.0, alt) * 0.92;
         float snowFactor = clamp(snowAlt * snowSlope + summitSnow, 0.0, 1.0);
 
-        vec2 uvDense = vWorldPos.xz * 0.02;
-        vec2 uvSparse = vWorldPos.xz * 0.004;
+        // Triplanar projection for massive vertical cliff faces
+        vec3 triWeight = pow(abs(normalize(vWorldNorm)), vec3(4.0));
+        triWeight /= (triWeight.x + triWeight.y + triWeight.z + 0.0001);
 
-        vec4 rockCol = mix(texture2D(uRockColor, uvDense), texture2D(uRockColor, uvSparse), 0.45);
-        vec4 snowCol = mix(texture2D(uSnowColor, uvDense), texture2D(uSnowColor, uvSparse), 0.35);
+        float mScale = 0.008;
+        vec2 uvX = vWorldPos.zy * mScale;
+        vec2 uvY = vWorldPos.xz * mScale;
+        vec2 uvZ = vWorldPos.xy * mScale;
+
+        vec4 rockCol = texture2D(uRockColor, uvX) * triWeight.x +
+                       texture2D(uRockColor, uvY) * triWeight.y +
+                       texture2D(uRockColor, uvZ) * triWeight.z;
+
+        vec4 snowCol = texture2D(uSnowColor, uvX) * triWeight.x +
+                       texture2D(uSnowColor, uvY) * triWeight.y +
+                       texture2D(uSnowColor, uvZ) * triWeight.z;
 
         // Brighten alpine rock in morning sun, prevent black shadowing
-        rockCol.rgb = mix(rockCol.rgb, rockCol.rgb * vec3(1.30, 1.30, 1.35), 0.5);
+        rockCol.rgb = mix(rockCol.rgb, rockCol.rgb * vec3(1.28, 1.28, 1.32), 0.5);
         // Glistening bright white snow
-        snowCol.rgb = mix(snowCol.rgb, vec3(1.05, 1.08, 1.12), 0.4);
+        snowCol.rgb = mix(snowCol.rgb, vec3(1.05, 1.08, 1.12), 0.45);
 
         vec4 blendedCol = mix(rockCol, snowCol, snowFactor);
+
+        // Atmospheric distance haze: distant massifs fade into soft alpine blue
+        float distToCam = length(vWorldPos - cameraPosition);
+        float haze = smoothstep(300.0, 950.0, distToCam) * 0.62;
+        vec3 hazeColor = vec3(0.68, 0.80, 0.92);
+        blendedCol.rgb = mix(blendedCol.rgb, hazeColor, haze);
+
         diffuseColor = blendedCol;
         `
       );
@@ -227,8 +250,12 @@ export function Mountains() {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
         `
-        float rRock = texture2D(uRockRough, uvDense).r;
-        float rSnow = texture2D(uSnowRough, uvDense).r;
+        float rRock = texture2D(uRockRough, uvX).r * triWeight.x +
+                      texture2D(uRockRough, uvY).r * triWeight.y +
+                      texture2D(uRockRough, uvZ).r * triWeight.z;
+        float rSnow = texture2D(uSnowRough, uvX).r * triWeight.x +
+                      texture2D(uSnowRough, uvY).r * triWeight.y +
+                      texture2D(uSnowRough, uvZ).r * triWeight.z;
         roughnessFactor = mix(rRock, rSnow, snowFactor) * 0.8;
         `
       );

@@ -8,15 +8,17 @@ Built with **Next.js (App Router, TypeScript, Tailwind CSS)**, **Three.js**, **R
 
 ## ✨ Features
 
-- **Atmospheric Himalayan Morning**: Soft morning sun casting long golden shadows, azure horizon fog, and crisp Himalayan alpine lighting.
-- **Procedural Winding Dirt Trail**: A continuous organic path winding through rolling valley foothills and rising toward the high mountain pass.
-- **Snow-Capped Peaks**: Low-poly distant Himalayan giants (inspired by Annapurna I and Machapuchare) rendered with snowy crowns and couloirs in a single merged draw call.
-- **High-Performance Instancing**: Hundreds of low-poly Himalayan pines and alpine boulders batched with `<instancedMesh>` targeting 60 FPS on mid-range devices.
+- **Realistic Himalayan Morning Lighting & 360° HDRI**: Clear mountain morning sky (`drakensberg_solitary_mountain_puresky`), directional golden morning sun with soft PCF shadows, and bright ambient alpine bounce.
+- **4-Way PBR Terrain Splatting**: Real 2K textures for mountain meadow grass, compacted dirt trail, slate/granite cliff rock, and snow. Features triplanar mapping on steep slopes to eliminate texture stretching, macro color variation noise to hide tiling, and soft organic trail edge blending.
+- **Atmospheric Distance Haze & Alpine Massifs**: Realistic Himalayan giants (Annapurna I, Annapurna South, Hiunchuli, Machapuchare) rendered with triplanar rock and snow textures, altitude/slope snowline distribution, and atmospheric distance haze fading to alpine blue.
+- **Realistic Instanced Alpha-Card Conifers**: Himalayan silver pines and deodars constructed with real pine bark PBR textures, photo-scanned conifer needle branch cards with alpha testing, mountain wind sway vertex animation, and distance/LOD culling.
+- **Photogrammetric Instanced Boulders**: Real 3D rock models (`rock_07`) batched with `<instancedMesh>`, slope filtering, and soil embedding.
+- **Adaptive Performance & Quality Tiers**: Dynamic DPR and quality profiles (High: 2K textures, SSAO, PCF shadows, 60 FPS desktop; Low: 1K textures, reduced instances, 30+ FPS mobile).
 - **First-Person Mountain Controls**:
   - **Desktop**: `WASD` / Arrow keys to walk, `Shift` to sprint, pointer-locked mouse look (`PointerLockControls`), and natural sinusoidal walking bob.
   - **Mobile**: Left-side virtual analog joystick for omnidirectional movement, right-side touch drag for fluid camera look.
-- **Real-Time Mountaineering HUD**: Live altimeter (meters + feet), compass azimuth heading, trek distance counter, and pause menu.
-- **Zero External 3D Models**: All geometry is generated entirely from code.
+- **Real-Time Mountaineering HUD**: Live altimeter starting from Nayapul (1,070m) climbing toward ABC (4,130m), compass azimuth heading toward the Annapurna Sanctuary, trek distance counter, and pause menu.
+- **Asset Streaming Progress**: Dynamic loading screen tracking real-time asset hydration percentage and file streaming.
 
 ---
 
@@ -147,3 +149,29 @@ vercel --prod
 - **3D Helpers & Controls**: [@react-three/drei](https://github.com/pmndrs/drei)
 - **State Management**: [Zustand](https://zustand-demo.pmnd.rs/)
 - **Styling**: [Tailwind CSS](https://tailwindcss.com/)
+
+---
+
+## 🎨 Asset Credits & Licenses
+
+All real-world HDRIs, PBR textures, and 3D photogrammetry models are licensed under **Creative Commons 0 (CC0 / Public Domain)** sourced from **[Poly Haven](https://polyhaven.com/)**:
+
+| Asset Type | Poly Haven Asset Name | Location in Project | License |
+|---|---|---|---|
+| **HDRI Environment** | `drakensberg_solitary_mountain_puresky` (2K) | `/public/hdri/sky.hdr` | [CC0](https://polyhaven.com/license) |
+| **PBR Grass** | `sparse_grass` (2K & 1K: Color, Normal, Roughness, AO) | `/public/textures/grass/` | [CC0](https://polyhaven.com/license) |
+| **PBR Trail Dirt** | `rocky_trail` (2K & 1K: Color, Normal, Roughness, AO) | `/public/textures/dirt/` | [CC0](https://polyhaven.com/license) |
+| **PBR Mountain Rock** | `cliff_side` (2K & 1K: Color, Normal, Roughness, AO) | `/public/textures/rock/` | [CC0](https://polyhaven.com/license) |
+| **PBR Alpine Snow** | `snow_02` (2K & 1K: Color, Normal, Roughness, AO) | `/public/textures/snow/` | [CC0](https://polyhaven.com/license) |
+| **PBR Pine Bark** | `pine_bark` (2K & 1K: Color, Normal, Roughness) | `/public/textures/bark/` | [CC0](https://polyhaven.com/license) |
+| **Needle Foliage** | `pine_tree_01` (Branch Needle Cutout + Normal) | `/public/textures/foliage/` | [CC0](https://polyhaven.com/license) |
+| **3D Rock Model** | `rock_07` (1K GLTF + Bin + Textures) | `/public/models/rock_07/` | [CC0](https://polyhaven.com/license) |
+
+---
+
+## ⚙️ Offline Procedural Fallback Generator
+
+The original procedural asset generator script is preserved at `scripts/generate-assets.js`:
+- **Role**: Offline fallback only.
+- **Function**: Procedurally generates synthetic 512px canvas texture maps (grass, dirt, rock, snow, sky) in environments where external network access to Poly Haven is unavailable.
+- **Usage**: `node scripts/generate-assets.js`

@@ -6,6 +6,7 @@ import { useFrame } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
 import { getTerrainHeight, getDistanceToPath, getTerrainSlope } from '@/lib/terrain';
 import { useTrekStore } from '@/store/useTrekStore';
+import { getTexturePath, configureTexture } from '@/lib/textures';
 
 function createSeededRandom(seed = 3344) {
   let s = seed;
@@ -20,13 +21,11 @@ export function InstancedGrass() {
   const quality = useTrekStore((s) => s.quality);
   const timeRef = useRef({ value: 0 });
 
-  const grassColor = useTexture('/textures/grass/color.jpg');
+  const grassColor = useTexture(getTexturePath('grass', 'color.jpg', quality));
   useLayoutEffect(() => {
-    grassColor.colorSpace = THREE.SRGBColorSpace;
-    grassColor.generateMipmaps = true;
-    grassColor.wrapS = THREE.RepeatWrapping;
-    grassColor.wrapT = THREE.RepeatWrapping;
-  }, [grassColor]);
+    const aniso = quality === 'high' ? 8 : quality === 'medium' ? 4 : 2;
+    configureTexture(grassColor, true, aniso);
+  }, [grassColor, quality]);
 
   // Crossed-blade tapered grass tuft geometry with vertex color gradient
   const grassGeometry = useMemo(() => {

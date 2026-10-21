@@ -2,7 +2,7 @@
 
 import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useTexture } from '@react-three/drei';
+import { useGLTF } from '@react-three/drei';
 import { getTerrainHeight, getDistanceToPath, getTerrainSlope } from '@/lib/terrain';
 import { useTrekStore } from '@/store/useTrekStore';
 
@@ -18,52 +18,51 @@ export function InstancedRocks() {
   const meshRef = useRef<THREE.InstancedMesh>(null!);
   const quality = useTrekStore((s) => s.quality);
 
-  const rockTextures = useTexture({
-    map: '/textures/rock/color.jpg',
-    normalMap: '/textures/rock/normal.jpg',
-    roughnessMap: '/textures/rock/roughness.jpg',
-  });
+  // Load the CC0 Poly Haven photogrammetric rock model
+  const { scene } = useGLTF('/models/rock_07/rock_07_1k.gltf');
 
-  useLayoutEffect(() => {
-    Object.values(rockTextures).forEach((tex) => {
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.RepeatWrapping;
-      tex.generateMipmaps = true;
-      tex.anisotropy = 8;
+  // Extract geometry and PBR material from loaded GLTF
+  const { rockGeometry, rockMaterial } = useMemo(() => {
+    let geo: THREE.BufferGeometry | null = null;
+    let mat: THREE.Material | null = null;
+
+    scene.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh && !geo) {
+        const mesh = child as THREE.Mesh;
+        geo = mesh.geometry.clone();
+        mat = Array.isArray(mesh.material) ? mesh.material[0].clone() : mesh.material.clone();
+      }
     });
-    rockTextures.map.colorSpace = THREE.SRGBColorSpace;
-  }, [rockTextures]);
 
-  const rockGeometry = useMemo(() => {
-    // Detailed faceted alpine boulder with natural vertex displacement
-    const geo = new THREE.DodecahedronGeometry(1.0, 1);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      let x = pos.getX(i);
-      let y = pos.getY(i);
-      let z = pos.getZ(i);
-
-      const d = Math.sin(x * 3.5) * Math.cos(y * 3.0) * Math.sin(z * 3.5) * 0.18;
-      x *= 1.0 + d;
-      y *= 0.8 + d; // Flatter profile
-      z *= 1.05 + d;
-
-      pos.setXYZ(i, x, y, z);
+    const rockGeo: THREE.BufferGeometry = geo ? geo : new THREE.DodecahedronGeometry(1.0, 1);
+    rockGeo.computeVertexNormals();
+    rockGeo.center();
+    if (geo) {
+      // Poly Haven rock_07 raw scale is ~0.15m units; normalize so base scale is ~1 meter
+      rockGeo.scale(7.2, 7.2, 7.2);
     }
-    geo.computeVertexNormals();
-    return geo;
-  }, []);
 
-  const rockMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      map: rockTextures.map,
-      normalMap: rockTextures.normalMap,
-      roughnessMap: rockTextures.roughnessMap,
-      roughness: 0.72,
-      metalness: 0.02,
-    });
-  }, [rockTextures]);
+    if (mat && (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+      const stdMat = mat as THREE.MeshStandardMaterial;
+      if (stdMat.map) {
+        stdMat.map.colorSpace = THREE.SRGBColorSpace;
+        stdMat.map.generateMipmaps = true;
+        stdMat.map.anisotropy = quality === 'high' ? 8 : 4;
+      }
+      if (stdMat.normalMap) {
+        stdMat.normalMap.generateMipmaps = true;
+      }
+      stdMat.roughness = 0.82;
+      stdMat.metalness = 0.04;
+    }
 
+    return {
+      rockGeometry: rockGeo,
+      rockMaterial: mat || new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02 }),
+    };
+  }, [scene, quality]);
+
+  // Compute instance matrices with slope filtering and soil embedding
   const { count, matrices } = useMemo(() => {
     const random = createSeededRandom(9911);
     const tempMatrix = new THREE.Matrix4();
@@ -73,36 +72,42 @@ export function InstancedRocks() {
     const quaternion = new THREE.Quaternion();
 
     const transforms: THREE.Matrix4[] = [];
-    const maxCandidates = quality === 'high' ? 360 : quality === 'medium' ? 240 : 140;
+    const maxCandidates = quality === 'high' ? 350 : quality === 'medium' ? 220 : 120;
 
     for (let i = 0; i < maxCandidates; i++) {
       const x = (random() - 0.5) * 200;
       const z = 75 - random() * 320; // from trailhead down to -245
 
       const distToPath = getDistanceToPath(x, z);
-      // Keep center of trail clear
+      // Keep center of walkable trail clear
       if (distToPath < 2.5) continue;
 
       // Filter out steep cliff slopes to prevent hovering boulders
       const slope = getTerrainSlope(x, z);
       if (slope > 0.35) continue;
 
-      // Favor rocks bordering the dirt trail (2.5 to 8.0)
-      const isTrailBorder = distToPath >= 2.5 && distToPath <= 7.5;
+      // Favor rocks bordering the dirt trail (2.5 to 8.5) and across meadows
+      const isTrailBorder = distToPath >= 2.5 && distToPath <= 8.5;
       if (!isTrailBorder && random() > 0.45) continue;
 
       const y = getTerrainHeight(x, z);
-      const scaleBase = isTrailBorder ? 0.4 + random() * 0.5 : 0.6 + random() * 0.9;
+      const scaleBase = isTrailBorder ? 0.45 + random() * 0.55 : 0.7 + random() * 0.95;
 
-      // Sink boulder firmly into terrain so base is embedded with no hovering
-      position.set(x, y - scaleBase * 0.15, z);
-      rotation.set(random() * Math.PI, random() * Math.PI * 2, random() * Math.PI);
+      // Sink boulder firmly into terrain so base is embedded with no hovering gap
+      position.set(x, y - scaleBase * 0.22, z);
+
+      // Random natural orientation
+      rotation.set(
+        (random() - 0.5) * 0.35,
+        random() * Math.PI * 2,
+        (random() - 0.5) * 0.35
+      );
       quaternion.setFromEuler(rotation);
 
       scale.set(
-        scaleBase * (0.8 + random() * 0.4),
-        scaleBase * (0.6 + random() * 0.4),
-        scaleBase * (0.8 + random() * 0.4)
+        scaleBase * (0.85 + random() * 0.35),
+        scaleBase * (0.75 + random() * 0.35),
+        scaleBase * (0.85 + random() * 0.35)
       );
 
       tempMatrix.compose(position, quaternion, scale);
@@ -129,3 +134,5 @@ export function InstancedRocks() {
     />
   );
 }
+
+useGLTF.preload('/models/rock_07/rock_07_1k.gltf');
